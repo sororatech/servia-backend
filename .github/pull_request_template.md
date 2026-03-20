@@ -8,7 +8,6 @@ Task: #
 
 
 ## Type of change
-<!-- Put an x inside the brackets for what applies: [x] -->
 - [ ] New feature
 - [ ] Bug fix
 - [ ] Database model change (migration included)
@@ -16,32 +15,24 @@ Task: #
 - [ ] Documentation update
 
 
-## Which repo does this affect?
-- [ ] servia-backend
-- [ ] servia-frontend
-- [ ] servia-bot
-
-
 ## How to test this PR
-<!-- Tell the reviewer exactly how to test your changes -->
 1.
 2.
 3.
 
 
-## Checklist before requesting review
-<!-- Every box must be ticked before you open the PR -->
-- [ ] I tested this locally and it works
+## Backend checklist
+- [ ] I tested this locally and python manage.py runserver works
 - [ ] I ran python manage.py migrate (if models changed)
-- [ ] I did not push to main directly
+- [ ] I ran python manage.py test and all tests pass
 - [ ] My branch is based on develop, not main
-- [ ] I have no hardcoded secrets, passwords or API keys in my code
-- [ ] The README is updated if setup steps changed
+- [ ] No hardcoded secrets, API keys or passwords in my code
+- [ ] All new endpoints are visible in Swagger
+- [ ] README updated if setup steps changed
 
 
-## Screenshots (if applicable)
-<!-- Paste a screenshot if your change affects an endpoint response or any UI -->
+## Screenshots
+<!-- Postman screenshot showing the endpoint response -->
 
 
 ## Notes for the reviewer
-<!-- Anything the reviewer should know before they look at the code -->
