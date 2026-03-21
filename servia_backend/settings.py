@@ -86,12 +86,30 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
-# CORS
-CORS_ALLOWED_ORIGINS = os.getenv('CORS_ALLOWED_ORIGINS', '*').split(',')
-CORS_ALLOW_ALL_ORIGINS = os.getenv('CORS_ALLOW_ALL_ORIGINS', 'True') == 'True'
-CORS_ALLOW_CREDENTIALS = True
+# Allow all origins only in development (and only if credentials are NOT used)
+CORS_ALLOW_ALL_ORIGINS = os.getenv('CORS_ALLOW_ALL_ORIGINS', 'False') == 'True'
 
-# Django REST Framework
+# Parse explicit origins from env var - '*' is NOT valid here
+cors_allowed_raw = os.getenv('CORS_ALLOWED_ORIGINS', '')
+if cors_allowed_raw and cors_allowed_raw != '*':
+    CORS_ALLOWED_ORIGINS = [
+        origin.strip() for origin in cors_allowed_raw.split(',') if origin.strip()
+    ]
+else:
+    # Default development origins
+    CORS_ALLOWED_ORIGINS = [
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+        'http://localhost:8000',
+    ]
+
+# Allow credentials (cookies, auth headers) - requires explicit origins
+CORS_ALLOW_CREDENTIALS = os.getenv('CORS_ALLOW_CREDENTIALS', 'True') == 'True'
+
+
+# =============================================================================
+# Django REST Framework Configuration
+# =============================================================================
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework.authentication.TokenAuthentication',
