@@ -1,9 +1,54 @@
-django==4.2.24
+# Django Core
+Django==4.2.24
 djangorestframework==3.15.2
-psycopg2==2.9.10
+
+# Database
 psycopg2-binary==2.9.10
-python-dotenv==1.0.1
+psycopg2==2.9.10 
 dj-database-url==1.0.0
-whitenoise==6.7.0
+
+# Environment & Config
+python-dotenv==1.0.1
+
+# Production Server & Static Files
 gunicorn==23.0.0
+whitenoise==6.7.0
+
+# CORS
 django-cors-headers==4.4.0
+
+# WebSocket Support (YOUR ADDITIONS - KEPT)
+channels==4.3.2
+channels_redis==4.3.0
+daphne==4.2.1
+redis==7.3.0
+
+# Twisted stack for async (required by channels/daphne)
+Twisted==25.5.0
+autobahn==25.12.2
+txaio==25.12.2
+pyasn1==0.6.3
+pyasn1_modules==0.4.2
+service-identity==24.2.0
+pyOpenSSL==26.0.0
+cryptography==46.0.5
+cffi==2.0.0
+pycparser==3.0
+zope.interface==8.2
+constantly==23.10.4
+hyperlink==21.0.0
+idna==3.11
+Automat==25.4.16
+Incremental==24.11.0
+
+# Utilities
+asgiref==3.11.1
+attrs==26.1.0
+cbor2==5.8.0
+msgpack==1.1.2
+packaging==26.0
+py-ubjson==0.16.1
+sqlparse==0.5.5
+typing_extensions==4.15.0
+tzdata==2025.3
+ujson==5.12.0

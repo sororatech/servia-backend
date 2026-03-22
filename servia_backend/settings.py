@@ -23,9 +23,10 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    # Third party
     'rest_framework',
     'corsheaders',
+    'channels',
+    'websocket',
 ]
 
 MIDDLEWARE = [
@@ -59,12 +60,22 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'servia_backend.wsgi.application'
+ASGI_APPLICATION = 'servia_backend.asgi.application'
 
 DATABASES = {
     'default': dj_database_url.config(
         default=os.getenv('DATABASE_URL', f'sqlite:///{BASE_DIR}/db.sqlite3'),
         conn_max_age=600
     )
+}
+
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            "hosts": [os.getenv('REDIS_URL', 'redis://127.0.0.1:6379')],
+        },
+    },
 }
 
 AUTH_PASSWORD_VALIDATORS = [
