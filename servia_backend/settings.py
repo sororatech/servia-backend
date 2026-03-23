@@ -27,6 +27,13 @@ INSTALLED_APPS = [
     'corsheaders',
     'channels',
     'websocket',
+    'apps.users',
+    'apps.job',
+    'apps.candidate',
+    'apps.interview',    
+    'apps.ai_reports',
+    'apps.reporting',
+
 ]
 
 MIDDLEWARE = [

@@ -1,0 +1,1 @@
+# No models needed; reporting uses queries directly
