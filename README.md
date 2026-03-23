@@ -161,3 +161,15 @@ servia-backend/
 - Redis must be running before starting Daphne
 - Test endpoint responds with latency in milliseconds
 ```
+
+## Cloudflare R2 Setup
+
+### Overview
+Cloudflare R2 is used for storing candidate CVs and other documents with zero egress fees.
+
+### Configuration Completed
+- **Bucket:** `servia-cv-storage`
+- **Access:** Public read, private write
+- **CORS:** Configured for frontend uploads
+- **Lifecycle:** Auto-delete after 365 days
+- **Free tier:** 10GB storage, 1M writes, 10M reads
