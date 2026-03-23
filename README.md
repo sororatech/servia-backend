@@ -84,20 +84,23 @@ WebSocket implementation for live interview transcripts and real-time dashboard 
 - Set `ASGI_APPLICATION = 'servia.asgi.application'`
 - Configured Redis channel layers in `settings.py`
 
-#### 2. WebSocket Consumer (`websocket/consumers.py`)
-- `connect()` - Accepts WebSocket connections
-- `disconnect()` - Handles disconnections
-- `receive()` - Processes incoming messages
-- `send()` - Sends responses to clients
+#### 2. WebSocket Consumers (`websocket/consumers.py`)
+- **TestConsumer** (`websocket/consumers.py`) – Simple test endpoint (hello → world)
+- **InterviewConsumer** (`apps/interview/consumers.py`) – Production endpoint with authentication and room-based broadcast
+  - `connect()` - Accepts connection, authenticates via token, joins interview room
+  - `disconnect()` - Removes from room on disconnect
+  - `receive()` - Processes incoming messages, broadcasts to room
+  - `send()` - Sends messages to clients
 
 #### 3. WebSocket Routing
-- Created `websocket/routing.py` with WebSocket URL patterns
-- Updated `servia/asgi.py` to route WebSocket connections
+- Created `servia_backend/routing.py` with WebSocket URL patterns
+- Updated `servia_backend/asgi.py` to route WebSocket connections
 
-#### 4. Test Endpoint
-- URL: `ws://localhost:8000/ws/test/`
-- Sends "world" when receiving "hello"
-- Latency measured and returned to client
+#### 4. Endpoints
+| Endpoint | Purpose | Authentication |
+|----------|---------|----------------|
+| `ws://localhost:8000/ws/test/` | Test endpoint (hello → world) | None |
+| `ws://localhost:8000/ws/interview/{id}/?token={token}` | Interview transcript | Token in query params |
 
 ### Installation Steps
 
@@ -140,17 +143,20 @@ daphne -b 127.0.0.1 -p 8000 servia.asgi:application
 ### File Structure
 ```
 servia-backend/
-├── servia_backend/
-│   ├── asgi.py          # WebSocket routing configuration
-│   └── settings.py      # Channel layers and app config
+├── apps/
+│   └── interview/
+│       └── consumers.py     # InterviewConsumer (with auth, room-based)
 ├── websocket/
-│   ├── consumers.py     # WebSocket handlers (connect, disconnect, receive, send)
-│   └── routing.py       # WebSocket URL patterns
-└── requirements.txt     # Project dependencies
+│   └── consumers.py         # TestConsumer only (for testing)
+├── servia_backend/
+│   ├── asgi.py              # Protocol router
+│   ├── routing.py           # WebSocket URL patterns
+│   └── settings.py          # Channel layers config
+└── requirements.txt         # Project dependencies
 ```
 
 ### Dependencies
-- Django 6.0.3
+- Django 4.2.24
 - Django Channels 4.3.2
 - channels-redis 4.3.0
 - Daphne 4.2.1 (ASGI server)
@@ -162,6 +168,7 @@ servia-backend/
 - Test endpoint responds with latency in milliseconds
 ```
 
+```
 ## Cloudflare R2 Setup
 
 ### Overview
@@ -173,3 +180,4 @@ Cloudflare R2 is used for storing candidate CVs and other documents with zero eg
 - **CORS:** Configured for frontend uploads
 - **Lifecycle:** Auto-delete after 365 days
 - **Free tier:** 10GB storage, 1M writes, 10M reads
+```
