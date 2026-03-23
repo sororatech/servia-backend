@@ -24,9 +24,9 @@ daphne==4.2.1
 redis==7.3.0
 
 # Twisted stack for async (required by channels/daphne)
-Twisted==25.5.0
-autobahn==25.12.2
-txaio==25.12.2
+Twisted==24.7.0
+autobahn==24.4.2
+txaio==25.9.2
 pyasn1==0.6.3
 pyasn1_modules==0.4.2
 service-identity==24.2.0
