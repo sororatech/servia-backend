@@ -37,6 +37,7 @@ class Job(models.Model):
 
     class Meta:
         db_table = 'job'
+        unique_together = [['title', 'location', 'department']] 
         indexes = [
             models.Index(fields=['is_active']),
             models.Index(fields=['department', 'is_active']),

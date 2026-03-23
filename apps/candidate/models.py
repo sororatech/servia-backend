@@ -1,7 +1,7 @@
 import uuid
+from django.conf import settings                      # <-- import settings
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
-from apps.users.models import CandidateUser
 from apps.job.models import Job
 
 class Candidate(models.Model):
@@ -18,6 +18,7 @@ class Candidate(models.Model):
         HOLD = 'hold', 'Hold'
 
     class CVStatus(models.TextChoices):
+        PENDING = 'pending', 'Pending'
         UPLOADED = 'uploaded', 'Uploaded'
         PROCESSING = 'processing', 'Processing'
         ANALYZED = 'analyzed', 'Analyzed'
@@ -29,7 +30,7 @@ class Candidate(models.Model):
         LOW = 'low', 'Low'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(CandidateUser, on_delete=models.CASCADE, db_index=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, db_index=True)   # use settings.AUTH_USER_MODEL
     job = models.ForeignKey(Job, on_delete=models.CASCADE, db_index=True)
     status = models.CharField(max_length=50, choices=Status.choices, default=Status.APPLIED, db_index=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
@@ -38,11 +39,11 @@ class Candidate(models.Model):
     cv_filename = models.CharField(max_length=255, blank=True, null=True)
     cv_text = models.TextField(blank=True, null=True)
     cv_uploaded_at = models.DateTimeField(blank=True, null=True)
-    cv_status = models.CharField(max_length=20, choices=CVStatus.choices, default=CVStatus.UPLOADED, db_index=True)
+    cv_status = models.CharField(max_length=20, choices=CVStatus.choices, default=CVStatus.PENDING, db_index=True)
 
     video_intro_url = models.CharField(max_length=500, blank=True, null=True)
     video_uploaded_at = models.DateTimeField(blank=True, null=True)
-    video_attempts = models.IntegerField(default=0)
+    video_attempts = models.IntegerField(default=0, validators=[MaxValueValidator(3)])
 
     ai_score = models.IntegerField(blank=True, null=True, validators=[MinValueValidator(0), MaxValueValidator(100)], db_index=True)
     ai_summary = models.TextField(blank=True, null=True)
