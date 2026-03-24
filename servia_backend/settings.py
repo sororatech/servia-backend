@@ -34,7 +34,8 @@ INSTALLED_APPS = [
     'apps.interview',    
     'apps.ai_reports',
     'apps.reporting',
-
+    'django_rest_passwordreset',
+    'drf_spectacular',
 ]
 
 MIDDLEWARE = [
@@ -54,7 +55,7 @@ ROOT_URLCONF = 'servia_backend.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -149,4 +150,47 @@ REST_FRAMEWORK = {
     ],
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'ServiaAI API',
+    'DESCRIPTION': 'AI-powered hospitality recruitment platform',
+    'VERSION': '1.0.0',
+    'SERVE_INCLUDE_SCHEMA': False,
+}
+
+# Celery
+CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')
+CELERY_RESULT_BACKEND = os.getenv('REDIS_URL', 'redis://localhost:6379')
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'UTC'
+
+# =============================================================================
+# Email Configuration (Resend API)
+# =============================================================================
+
+# Use Resend API backend in production, console for local dev
+if DEBUG:
+    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+else:
+    EMAIL_BACKEND = 'apps.users.email_backends.ResendBackend'
+
+# Resend API configuration
+RESEND_API_KEY = os.getenv('RESEND_API_KEY', '')
+
+# Default sender for all emails
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@servia-client.com')
+
+# Email settings for fallback/compatibility (not used with ResendBackend)
+EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.resend.com')
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
+EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True') == 'True'
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
+
+CLOUDFLARE_R2_ACCESS_KEY = os.getenv('CLOUDFLARE_R2_ACCESS_KEY')
+CLOUDFLARE_R2_SECRET_KEY = os.getenv('CLOUDFLARE_R2_SECRET_KEY')
+CLOUDFLARE_R2_BUCKET = os.getenv('CLOUDFLARE_R2_BUCKET')
+CLOUDFLARE_R2_ENDPOINT = f'https://{os.getenv("CLOUDFLARE_R2_ACCOUNT_ID")}.r2.cloudflarestorage.com'

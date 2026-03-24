@@ -1,0 +1,19 @@
+<p>Hello {{ candidate.user.first_name }},</p>
+<p>Thank you for applying for the <strong>{{ candidate.job.title }}</strong> position at ServiaAI.</p>
+<p>After analyzing your CV, we've identified the following:</p>
+<p><strong>Summary:</strong> {{ candidate.ai_summary }}</p>
+<p><strong>Strengths:</strong></p>
+<ul>
+{% for strength in candidate.ai_strengths %}
+<li>{{ strength }}</li>
+{% endfor %}
+</ul>
+<p><strong>Areas to improve:</strong></p>
+<ul>
+{% for weakness in candidate.ai_weaknesses %}
+<li>{{ weakness }}</li>
+{% endfor %}
+</ul>
+<p>{{ candidate.ai_feedback }}</p>
+<p>We encourage you to keep applying for positions that match your profile. Thank you for your interest.</p>
+<p>Best regards,<br>ServiaAI Team</p>

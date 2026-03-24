@@ -1,0 +1,7 @@
+<p>Hello {{ interview.candidate.user.first_name }},</p>
+<p>Your interview for <strong>{{ interview.job.title }}</strong> has been scheduled.</p>
+<p><strong>Date:</strong> {{ interview.scheduled_time|date:"M d, Y H:i" }}</p>
+<p><strong>Join via Google Meet:</strong> <a href="{{ interview.meet_link }}">{{ interview.meet_link }}</a></p>
+<p>Please confirm your attendance by clicking the link below:</p>
+<p><a href="{{ confirm_url }}">Confirm</a> | <a href="{{ decline_url }}">Decline</a></p>
+<p>Thank you,<br>ServiaAI Team</p>

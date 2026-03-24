@@ -8,4 +8,6 @@ router.register(r'conversations', views.InterviewConversationViewSet)
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('confirm/<uuid:token>/', views.InterviewConfirmView.as_view(), name='confirm-interview'),
+    path('decline/<uuid:token>/', views.InterviewDeclineView.as_view(), name='decline-interview'),
 ]

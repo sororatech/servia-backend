@@ -1,11 +1,17 @@
-from rest_framework import viewsets, permissions, status
+from rest_framework import viewsets, permissions, status, views
 from rest_framework.authtoken.models import Token
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.contrib.auth import authenticate
 from django.db import IntegrityError
 from .models import CandidateUser, RecruiterUser
 from .serializers import CandidateUserSerializer, RecruiterUserSerializer
+from apps.users.tasks import send_welcome_email, send_password_reset_email
+from rest_framework.permissions import AllowAny
+from django.contrib.auth import get_user_model
+from django.contrib.auth.tokens import default_token_generator
+from django.conf import settings
 
 class CandidateUserViewSet(viewsets.ModelViewSet):
     """
@@ -14,7 +20,6 @@ class CandidateUserViewSet(viewsets.ModelViewSet):
     queryset = CandidateUser.objects.all()
     serializer_class = CandidateUserSerializer
     permission_classes = [permissions.IsAdminUser]
-
 
 class RecruiterUserViewSet(viewsets.ModelViewSet):
     """
@@ -86,6 +91,8 @@ class CandidateRegistrationView(APIView):
                 candidate = serializer.save()
                 user = candidate.user
                 token, _ = Token.objects.get_or_create(user=user)
+                # Send welcome email asynchronously
+                send_welcome_email.delay(user.id)
                 return Response({
                     'token': token.key,
                     'user_id': user.id,
@@ -115,3 +122,92 @@ class RecruiterCreateView(APIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class LogoutView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        request.user.auth_token.delete()
+        return Response({'detail': 'Logged out successfully.'}, status=status.HTTP_200_OK)
+
+User = get_user_model()
+
+class PasswordResetRequestView(views.APIView):
+    """
+    Custom password reset request that triggers async email via Celery.
+    """
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        email = request.data.get('email')
+        
+        if not email:
+            return Response(
+                {'error': 'Email is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            # Return 200 even if user not found (security best practice)
+            return Response(
+                {'message': 'If an account exists with this email, you will receive a password reset link.'},
+                status=status.HTTP_200_OK
+            )
+        
+        # Generate reset token
+        token = default_token_generator.make_token(user)
+        
+        # Build reset URL (use FRONTEND_URL from settings)
+        frontend_url = getattr(settings, 'FRONTEND_URL','')
+        reset_url = f"{frontend_url}/password-reset/confirm/{user.id}/{token}/"
+        
+        # Trigger Celery task to send email via Resend
+        send_password_reset_email.delay(user.email, reset_url)
+        
+        return Response(
+            {'message': 'If an account exists with this email, you will receive a password reset link.'},
+            status=status.HTTP_200_OK
+        )
+
+class PasswordResetConfirmView(views.APIView):
+    """
+    Custom password reset confirmation.
+    """
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        uid = request.data.get('uid')
+        token = request.data.get('token')
+        new_password = request.data.get('new_password')
+        
+        if not all([uid, token, new_password]):
+            return Response(
+                {'error': 'uid, token, and new_password are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            user = User.objects.get(id=uid)
+        except User.DoesNotExist:
+            return Response(
+                {'error': 'Invalid token or user ID'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validate token
+        if not default_token_generator.check_token(user, token):
+            return Response(
+                {'error': 'Invalid or expired token'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Set new password
+        user.set_password(new_password)
+        user.save()
+        
+        return Response(
+            {'message': 'Password has been reset successfully'},
+            status=status.HTTP_200_OK
+        )

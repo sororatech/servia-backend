@@ -1,13 +1,15 @@
-# apps/candidate/views.py
-
+import uuid
 from rest_framework import viewsets, permissions
 from rest_framework.exceptions import PermissionDenied
 from .models import Candidate, ActivityLog
 from .serializers import CandidateSerializer, ActivityLogSerializer
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 from django.utils import timezone
+from .services.storage import generate_signed_url
+from apps.users.tasks import send_html_email
 class CandidateViewSet(viewsets.ModelViewSet):
     serializer_class = CandidateSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -20,7 +22,6 @@ class CandidateViewSet(viewsets.ModelViewSet):
         elif hasattr(user, 'candidate_profile'):
             return Candidate.objects.filter(user=user)
         return Candidate.objects.none()
-
     def perform_create(self, serializer):
         user = self.request.user
         if hasattr(user, 'candidate_profile'):
@@ -28,6 +29,18 @@ class CandidateViewSet(viewsets.ModelViewSet):
         else:
             raise PermissionDenied("Only candidates can create applications.")
 
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        old_status = instance.status
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        new_status = instance.status
+        if old_status != new_status:
+            from apps.candidate.services.email_notifications import send_status_email
+            send_status_email(instance, new_status, old_status)
+        return Response(serializer.data)
 
 class ActivityLogViewSet(viewsets.ModelViewSet):
     serializer_class = ActivityLogSerializer
@@ -70,3 +83,53 @@ class VideoUploadView(APIView):
         candidate.save()
 
         return Response({'message': 'Video uploaded successfully'}, status=200)
+class CVUploadURLView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, candidate_id):
+        candidate = Candidate.objects.get(id=candidate_id)
+        if candidate.user != request.user and not hasattr(request.user, 'recruiter_profile'):
+            return Response({'error': 'Not authorized'}, status=403)
+        
+        file_extension = request.data.get('file_extension', 'pdf').lower()
+        if file_extension not in ['pdf', 'docx']:
+            return Response({'error': 'Only PDF and DOCX files are supported.'}, status=400)
+
+        # Map extension to MIME type
+        content_type_map = {
+            'pdf': 'application/pdf',
+            'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        }
+        content_type = content_type_map.get(file_extension, 'application/octet-stream')
+
+        file_key = f'cv/{candidate_id}/{uuid.uuid4()}.{file_extension}'
+        
+        # Pass content_type to generate_signed_url
+        signed_url = generate_signed_url(
+            file_key, 
+            method='put_object', 
+            expires_in=900,  # 15 minutes
+            content_type=content_type 
+        )
+        
+        return Response({
+            'upload_url': signed_url, 
+            'file_key': file_key,
+            'content_type': content_type,  # Return this for frontend to use
+        })
+class CVUploadConfirmView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, candidate_id):
+        candidate = Candidate.objects.get(id=candidate_id)
+        file_key = request.data.get('file_key')
+        filename = request.data.get('filename', '')
+        if not file_key:
+            return Response({'error': 'file_key required'}, status=400)
+
+        candidate.cv_file = file_key
+        candidate.cv_filename = filename
+        candidate.cv_uploaded_at = timezone.now()
+        candidate.cv_status = 'uploaded'
+        candidate.save()
+        return Response({'status': 'CV uploaded successfully'})
