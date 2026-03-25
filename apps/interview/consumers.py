@@ -16,7 +16,8 @@ class InterviewConsumer(AsyncWebsocketConsumer):
         self.user = await self.authenticate_token(token_key)
 
         if self.user is None:
-            await self.close()
+            await self.accept()
+            await self.close(code=4003)
             return
 
         await self.channel_layer.group_add(self.group_name, self.channel_name)
