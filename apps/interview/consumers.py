@@ -36,9 +36,10 @@ class InterviewConsumer(AsyncWebsocketConsumer):
             self.group_name,
             {
                 'type': 'transcript_message',
-                'message': data.get('message', ''),
+                'message': data.get('text') or data.get('message', ''),
                 'speaker': data.get('speaker', 'unknown'),
                 'timestamp': data.get('timestamp', ''),
+                'event_type': data.get('type', 'transcript'),
             }
         )
 
