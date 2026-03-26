@@ -6,6 +6,7 @@ from rest_framework.exceptions import ValidationError
 from apps.ai_reports.models import AIReport, TemporaryAIResponse
 from apps.ai_reports.serializers import AIReportSerializer
 from apps.candidate.models import Candidate
+from apps.users.tasks import send_cv_analyzed_email, send_rejected_cv_email
 from apps.ai_reports.services.gemini_client import (
     GeminiConfigurationError,
     GeminiResponseError,
@@ -56,24 +57,29 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str)
                 **serializer.validated_data,
             )
 
-            candidate.ai_score = serializer.validated_data['fit_score']
+            fit_score = serializer.validated_data['fit_score']
+            candidate.ai_score = fit_score
             candidate.ai_summary = serializer.validated_data['summary']
             candidate.ai_strengths = serializer.validated_data['strengths']
             candidate.ai_weaknesses = serializer.validated_data['weaknesses']
             candidate.ai_feedback = serializer.validated_data['feedback']
             candidate.cv_status = Candidate.CVStatus.ANALYZED
-            candidate.save(
-                update_fields=[
-                    'ai_score',
-                    'ai_summary',
-                    'ai_strengths',
-                    'ai_weaknesses',
-                    'ai_feedback',
-                    'cv_status',
-                    'updated_at',
-                ]
-            )
 
+            update_fields = [
+                'ai_score', 'ai_summary', 'ai_strengths',
+                'ai_weaknesses', 'ai_feedback', 'cv_status', 'updated_at',
+            ]
+
+            if fit_score < 50:
+                candidate.status = Candidate.Status.REJECTED_CV
+                update_fields.append('status')
+
+            candidate.save(update_fields=update_fields)
+
+        if fit_score < 50:
+            send_rejected_cv_email.delay(candidate_id)
+        else:
+            send_cv_analyzed_email.delay(candidate_id)
         print(f"CV analysis complete for candidate {candidate_id} — score: {result['fit_score']}")
 
         return {
@@ -86,6 +92,8 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str)
     except (ValidationError, GeminiResponseError, GeminiConfigurationError, ObjectDoesNotExist) as e:
         candidate = Candidate.objects.filter(id=candidate_id).first()
         if candidate:
+            candidate.cv_status = Candidate.CVStatus.ERROR
+            candidate.save(update_fields=['cv_status'])
             TemporaryAIResponse.objects.create(
                 candidate=candidate,
                 raw_response={
@@ -102,4 +110,9 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str)
 
     except Exception as e:
         print(f"CV analysis failed for candidate {candidate_id}: {e}")
+        if self.request.retries >= self.max_retries:
+            candidate = Candidate.objects.filter(id=candidate_id).first()
+            if candidate:
+                candidate.cv_status = Candidate.CVStatus.ERROR
+                candidate.save(update_fields=['cv_status'])
         raise self.retry(exc=e, countdown=60)

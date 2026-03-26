@@ -113,7 +113,7 @@ def analyze_cv(cv_text: str, job_description: str, max_retries: int = 3) -> dict
                 prompt,
                 generation_config=genai.types.GenerationConfig(
                     temperature=0,
-                    max_output_tokens=1600,
+                    max_output_tokens=2048,
                     response_mime_type="application/json",
                     response_schema=CV_SCREENING_RESPONSE_SCHEMA,
                 ),

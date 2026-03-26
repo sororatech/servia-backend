@@ -2,6 +2,8 @@ from rest_framework import serializers
 from .models import Job
 
 class JobSerializer(serializers.ModelSerializer):
+    candidate_count = serializers.IntegerField(read_only=True, default=0)
+
     class Meta:
         model = Job
         fields = '__all__'
