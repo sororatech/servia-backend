@@ -12,6 +12,8 @@ from rest_framework.permissions import AllowAny
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.conf import settings
+from django.utils.http import urlsafe_base64_encode
+from django.utils.encoding import force_bytes
 
 class CandidateUserViewSet(viewsets.ModelViewSet):
     """
@@ -133,15 +135,14 @@ class LogoutView(APIView):
 User = get_user_model()
 
 class PasswordResetRequestView(views.APIView):
-    """
-    Custom password reset request that triggers async email via Celery.
-    """
     permission_classes = [AllowAny]
     
     def post(self, request):
         email = request.data.get('email')
+        print(f"Password reset requested for: {email}")
         
         if not email:
+            print("No email provided")
             return Response(
                 {'error': 'Email is required'},
                 status=status.HTTP_400_BAD_REQUEST
@@ -149,8 +150,9 @@ class PasswordResetRequestView(views.APIView):
         
         try:
             user = User.objects.get(email=email)
+            print(f"User found: {user.email}")
         except User.DoesNotExist:
-            # Return 200 even if user not found (security best practice)
+            print(f"User not found: {email}")
             return Response(
                 {'message': 'If an account exists with this email, you will receive a password reset link.'},
                 status=status.HTTP_200_OK
@@ -158,13 +160,17 @@ class PasswordResetRequestView(views.APIView):
         
         # Generate reset token
         token = default_token_generator.make_token(user)
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
         
-        # Build reset URL (use FRONTEND_URL from settings)
-        frontend_url = getattr(settings, 'FRONTEND_URL','')
-        reset_url = f"{frontend_url}/password-reset/confirm/{user.id}/{token}/"
+        # Build reset URL
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000')
+        reset_url = f"{frontend_url}/reset/{uid}/{token}/"
+        print(f"Reset URL: {reset_url}")
         
-        # Trigger Celery task to send email via Resend
-        send_password_reset_email.delay(user.email, reset_url)
+        # Call the task directly
+        print("Calling send_password_reset_email...")
+        send_password_reset_email(user.email, reset_url)
+        print("send_password_reset_email called")
         
         return Response(
             {'message': 'If an account exists with this email, you will receive a password reset link.'},

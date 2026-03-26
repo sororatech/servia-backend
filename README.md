@@ -166,6 +166,8 @@ servia-backend/
 - Use Daphne, not `runserver`, for WebSocket support
 - Redis must be running before starting Daphne
 - Test endpoint responds with latency in milliseconds
+- Production endpoints require authentication token
+- Test endpoint is unauthenticated for development
 ```
 
 ```
@@ -176,7 +178,7 @@ Cloudflare R2 is used for storing candidate CVs and other documents with zero eg
 
 ### Configuration Completed
 - **Bucket:** `servia-cv-storage`
-- **Access:** Public read, private write
+- **Access:** Private read via signed URLs, private write
 - **CORS:** Configured for frontend uploads
 - **Lifecycle:** Auto-delete after 365 days
 - **Free tier:** 10GB storage, 1M writes, 10M reads

@@ -1,7 +1,45 @@
-<p>Hello {{ interview.candidate.user.first_name }},</p>
-<p>Your interview for <strong>{{ interview.job.title }}</strong> has been scheduled.</p>
-<p><strong>Date:</strong> {{ interview.scheduled_time|date:"M d, Y H:i" }}</p>
-<p><strong>Join via Google Meet:</strong> <a href="{{ interview.meet_link }}">{{ interview.meet_link }}</a></p>
-<p>Please confirm your attendance by clicking the link below:</p>
-<p><a href="{{ confirm_url }}">Confirm</a> | <a href="{{ decline_url }}">Decline</a></p>
-<p>Thank you,<br>ServiaAI Team</p>
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Interview Invitation</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #10b981; color: white; padding: 20px; text-align: center; }
+        .content { padding: 20px; background: #f9fafb; }
+        .button { display: inline-block; background: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; margin: 10px 0; }
+        .details { background: #f3f4f6; padding: 15px; border-radius: 5px; margin: 15px 0; }
+        .button-secondary { display: inline-block; background: #6b7280; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin: 5px; }
+        .footer { text-align: center; padding: 20px; font-size: 12px; color: #6b7280; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Interview Invitation</h1>
+        </div>
+        <div class="content">
+            <p>Hello <strong>{{ interview.candidate.user.first_name }}</strong>,</p>
+            <p>Your interview for <strong>{{ interview.job.title }}</strong> has been scheduled.</p>
+            
+            <div class="details">
+                <p><strong>Date:</strong> {{ interview.scheduled_time|date:"M d, Y H:i" }}</p>
+                <p><strong>Location:</strong> Google Meet (online)</p>
+                <p><strong>Join Link:</strong> <a href="{{ interview.meet_link }}">{{ interview.meet_link }}</a></p>
+            </div>
+            
+            <p>Please confirm your attendance:</p>
+            <p style="text-align: center;">
+                <a href="{{ confirm_url }}" class="button" style="background: #10b981;">✓ Confirm</a>
+                <a href="{{ decline_url }}" class="button-secondary" style="background: #6b7280;">✗ Decline</a>
+            </p>
+            
+            <p>Thank you,<br>ServiaAI Team</p>
+        </div>
+        <div class="footer">
+            <p>ServiaAI – AI-Powered Hospitality Recruitment</p>
+        </div>
+    </div>
+</body>
+</html>
