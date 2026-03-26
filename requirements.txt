@@ -69,6 +69,5 @@ wcwidth==0.6.0
 whitenoise==6.7.0
 zope.interface==8.2
 resend==0.8.0
-
-
 python-magic==0.4.27
+ujson==5.12.0

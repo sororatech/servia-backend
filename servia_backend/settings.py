@@ -71,19 +71,28 @@ TEMPLATES = [
 WSGI_APPLICATION = 'servia_backend.wsgi.application'
 ASGI_APPLICATION = 'servia_backend.asgi.application'
 
-DATABASES = {
-    'default': dj_database_url.config(
-        default=os.getenv('DATABASE_URL', f'sqlite:///{BASE_DIR}/db.sqlite3'),
-        conn_max_age=600
-    )
-}
+DATABASE_URL = os.getenv('DATABASE_URL')
+if DATABASE_URL:
+    DATABASES = {
+        'default': dj_database_url.parse(DATABASE_URL)
+    }
+else:
+    # Fallback for Docker
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.getenv('POSTGRES_DB', 'servia'),
+            'USER': os.getenv('POSTGRES_USER', 'servia'),
+            'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'servia123'),
+            'HOST': 'db',  # Only for Docker!
+            'PORT': '5432',
+        }
+    }
 
 CHANNEL_LAYERS = {
     'default': {
         'BACKEND': 'channels_redis.core.RedisChannelLayer',
-        'CONFIG': {
-            "hosts": [os.getenv('REDIS_URL', 'redis://127.0.0.1:6379')],
-        },
+        'CONFIG': {"hosts": [os.getenv('REDIS_URL', 'redis://redis:6379')]},
     },
 }
 AUTH_USER_MODEL = 'auth.User'  # Default user model

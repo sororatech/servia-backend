@@ -56,12 +56,52 @@ http://localhost:8000
 
 Expected result: Page shows "Hello Sorora Tech"
 
+## Local Development with Docker
+
+### Prerequisites
+- [Docker](https://docs.docker.com/get-docker/) and Docker Compose installed
+
+### 1. Set up environment variables
+```bash
+cp .env.example .env
+```
+Edit `.env` and fill in your values (ask a teammate for the shared dev credentials).
+
+### 2. Start services
+```bash
+docker-compose up -d
+```
+
+### 3. Run migrations
+```bash
+docker-compose exec web python manage.py migrate
+```
+
+### 4. View logs
+```bash
+docker-compose logs -f
+```
+
+### 5. Stop services
+```bash
+docker-compose down
+```
+
+### Service URLs
+| Service | URL |
+|---------|-----|
+| Django API | http://localhost:8001 |
+| Health check | http://localhost:8001/health/ |
+| Redis | localhost:6380 |
+
+---
+
 ## Tech Stack
-- Python 3.11+
+- Python 3.13
 - Django 4.2
 - Django REST Framework
-- SQLite (local development)
-- PostgreSQL (production — Heroku)
+- PostgreSQL (Supabase — shared dev + production)
+- Redis (local Docker for Celery/WebSocket)
 
 ## Branch Strategy
 - main — production only
