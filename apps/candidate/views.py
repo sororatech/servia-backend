@@ -159,7 +159,7 @@ class CVUploadURLView(APIView):
             'file_key': file_key,
             'content_type': content_type,  # Return this for frontend to use
         })
-    
+
 class CVUploadConfirmView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -197,7 +197,6 @@ class CVUploadConfirmView(APIView):
                 candidate.cv_status = 'error'
                 candidate.save()
                 os.unlink(tmp_path)
-                logger.error(f"No text extracted from CV: {filename}")
                 return Response(
                     {'error': 'Could not extract text from CV. Please upload a text-based PDF or DOCX.'},
                     status=status.HTTP_400_BAD_REQUEST
@@ -209,15 +208,8 @@ class CVUploadConfirmView(APIView):
             
             os.unlink(tmp_path)
             
-            logger.info(f"Text extracted from CV: {len(extracted_text)} chars")
-            
         except Exception as e:
-            logger.error(f"Text extraction failed for candidate {candidate.id}: {e}")
             candidate.cv_status = 'error'
             candidate.save()
-            return Response(
-                {'error': 'Failed to process CV. Please try again.'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
         
         return Response({'status': 'CV uploaded successfully', 'cv_status': 'processing'})
