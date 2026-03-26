@@ -43,7 +43,8 @@ class Candidate(models.Model):
 
     video_intro_url = models.CharField(max_length=500, blank=True, null=True)
     video_uploaded_at = models.DateTimeField(blank=True, null=True)
-    video_attempts = models.IntegerField(default=0, validators=[MaxValueValidator(3)])
+    video_attempts = models.IntegerField(default=0)
+    video_last_failed_attempt = models.DateTimeField(null=True, blank=True)
 
     ai_score = models.IntegerField(blank=True, null=True, validators=[MinValueValidator(0), MaxValueValidator(100)], db_index=True)
     ai_summary = models.TextField(blank=True, null=True)

@@ -41,7 +41,7 @@ class Interview(models.Model):
 
     cancelled_at = models.DateTimeField(blank=True, null=True)
     cancellation_reason = models.TextField(blank=True, null=True)
-
+    confirmation_token = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

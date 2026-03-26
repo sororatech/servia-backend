@@ -7,6 +7,8 @@ router.register(r'candidates', views.CandidateViewSet)
 router.register(r'activities', views.ActivityLogViewSet)
 
 urlpatterns = [
-    path('', include(router.urls)),
+    path('candidates/<uuid:candidate_id>/upload-cv/', views.CVUploadURLView.as_view(), name='upload-cv-url'),
+    path('candidates/<uuid:candidate_id>/confirm-cv/', views.CVUploadConfirmView.as_view(), name='confirm-cv'),
     path('candidates/<uuid:candidate_id>/upload-video/', views.VideoUploadView.as_view(), name='upload-video'),
+    path('', include(router.urls)),
 ]
