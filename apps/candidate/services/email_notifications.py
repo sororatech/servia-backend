@@ -1,7 +1,3 @@
-"""
-Email notification service for candidate status changes.
-"""
-
 import logging
 from apps.users.tasks import (
     send_shortlisted_email,

@@ -10,6 +10,7 @@ from rest_framework import status
 from django.utils import timezone
 from .services.storage import generate_signed_url
 from apps.users.tasks import send_html_email
+
 class CandidateViewSet(viewsets.ModelViewSet):
     serializer_class = CandidateSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -22,6 +23,7 @@ class CandidateViewSet(viewsets.ModelViewSet):
         elif hasattr(user, 'candidate_profile'):
             return Candidate.objects.filter(user=user)
         return Candidate.objects.none()
+    
     def perform_create(self, serializer):
         user = self.request.user
         if hasattr(user, 'candidate_profile'):
@@ -42,6 +44,7 @@ class CandidateViewSet(viewsets.ModelViewSet):
             send_status_email(instance, new_status, old_status)
         return Response(serializer.data)
 
+
 class ActivityLogViewSet(viewsets.ModelViewSet):
     serializer_class = ActivityLogSerializer
     permission_classes = [permissions.IsAuthenticated]
@@ -56,8 +59,9 @@ class ActivityLogViewSet(viewsets.ModelViewSet):
             return ActivityLog.objects.filter(candidate__user=user)
         return ActivityLog.objects.none()
 
+
 class VideoUploadView(APIView):
-    permission_classes = [permissions.IsAuthenticated]  # or allow candidates only
+    permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, candidate_id):
         # Ensure the candidate belongs to the logged‑in user
@@ -68,21 +72,60 @@ class VideoUploadView(APIView):
         else:
             return Response({'error': 'Only candidates can upload videos.'}, status=403)
 
-        # Enforce max 3 attempts
-        if candidate.video_attempts >= 3:
+        # Check if video already uploaded successfully
+        if candidate.video_intro_url:
+            return Response({'error': 'Video already uploaded.'}, status=400)
+
+        # Cooldown check (5 failed attempts = 1 hour lock)
+        one_hour_ago = timezone.now() - timezone.timedelta(hours=1)
+        
+        if candidate.video_attempts >= 5:
+            if candidate.video_last_failed_attempt and candidate.video_last_failed_attempt > one_hour_ago:
+                # Still in cooldown
+                wait_minutes = 60 - ((timezone.now() - candidate.video_last_failed_attempt).seconds // 60)
+                return Response(
+                    {'error': f'Too many failed attempts. Please try again in {wait_minutes} minutes.'},
+                    status=status.HTTP_429_TOO_MANY_REQUESTS
+                )
+            else:
+                # Cooldown period passed, reset attempts
+                candidate.video_attempts = 0
+                candidate.video_last_failed_attempt = None
+                candidate.save(update_fields=['video_attempts', 'video_last_failed_attempt'])
+
+        upload_success = True  
+        
+        if upload_success:
+            # Success: store video info and reset attempts
+            candidate.video_intro_url = "https://stream.example.com/video-id"  # Replace with actual URL
+            candidate.video_uploaded_at = timezone.now()
+            candidate.video_attempts = 0
+            candidate.video_last_failed_attempt = None
+            candidate.save()
+            
+            # Create activity log
+            ActivityLog.objects.create(
+                candidate=candidate,
+                event_type=ActivityLog.EventType.VIDEO_UPLOADED,
+                note="Video uploaded successfully",
+                created_by_type=ActivityLog.CreatedByType.CANDIDATE,
+                created_by_id=request.user.id
+            )
+            
+            return Response({'message': 'Video uploaded successfully'}, status=200)
+        else:
+            # Failure: increment attempts and record time
+            candidate.video_attempts += 1
+            candidate.video_last_failed_attempt = timezone.now()
+            candidate.save(update_fields=['video_attempts', 'video_last_failed_attempt'])
+            
+            remaining = 5 - candidate.video_attempts
             return Response(
-                {'error': 'Maximum 3 upload attempts reached.'},
+                {'error': f'Upload failed. {remaining} attempts remaining.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Process the video upload (e.g., get signed URL from Cloudflare, save the URL)
 
-        # After successful upload:
-        candidate.video_attempts += 1
-        candidate.video_uploaded_at = timezone.now()
-        candidate.save()
-
-        return Response({'message': 'Video uploaded successfully'}, status=200)
 class CVUploadURLView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -117,6 +160,7 @@ class CVUploadURLView(APIView):
             'file_key': file_key,
             'content_type': content_type,  # Return this for frontend to use
         })
+
 class CVUploadConfirmView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -131,5 +175,5 @@ class CVUploadConfirmView(APIView):
         candidate.cv_filename = filename
         candidate.cv_uploaded_at = timezone.now()
         candidate.cv_status = 'uploaded'
-        candidate.save()
+        candidate.save()      
         return Response({'status': 'CV uploaded successfully'})
