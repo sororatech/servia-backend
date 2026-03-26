@@ -5,6 +5,15 @@ from django.conf import settings
 def generate_signed_url(file_key, method='put_object', expires_in=900, content_type=None):
     """
     Generate a presigned URL for Cloudflare R2.
+    
+    Args:
+        file_key: The S3 key/path for the file
+        method: 'put_object' for upload, 'get_object' for download
+        expires_in: URL expiry in seconds (default: 15 minutes)
+        content_type: MIME type of the file (only used for uploads)
+    
+    Returns:
+        str: Presigned URL
     """
     s3 = boto3.client(
         's3',
@@ -22,7 +31,7 @@ def generate_signed_url(file_key, method='put_object', expires_in=900, content_t
         'Key': file_key,
     }
     
-    if content_type:
+    if content_type and method == 'put_object':
         params['ContentType'] = content_type
     
     url = s3.generate_presigned_url(

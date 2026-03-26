@@ -1,4 +1,5 @@
 import uuid
+import logging
 from rest_framework import viewsets, permissions
 from rest_framework.exceptions import PermissionDenied
 from .models import Candidate, ActivityLog
@@ -10,6 +11,7 @@ from rest_framework import status
 from django.utils import timezone
 from .services.storage import generate_signed_url
 from apps.users.tasks import send_html_email
+logger = logging.getLogger(__name__)
 
 class CandidateViewSet(viewsets.ModelViewSet):
     serializer_class = CandidateSerializer
@@ -64,7 +66,6 @@ class VideoUploadView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, candidate_id):
-        # Ensure the candidate belongs to the logged‑in user
         candidate = Candidate.objects.get(id=candidate_id)
         if hasattr(request.user, 'candidate_profile'):
             if candidate.user != request.user:
@@ -72,11 +73,9 @@ class VideoUploadView(APIView):
         else:
             return Response({'error': 'Only candidates can upload videos.'}, status=403)
 
-        # Check if video already uploaded successfully
         if candidate.video_intro_url:
             return Response({'error': 'Video already uploaded.'}, status=400)
 
-        # Cooldown check (5 failed attempts = 1 hour lock)
         one_hour_ago = timezone.now() - timezone.timedelta(hours=1)
         
         if candidate.video_attempts >= 5:
@@ -103,7 +102,6 @@ class VideoUploadView(APIView):
             candidate.video_last_failed_attempt = None
             candidate.save()
             
-            # Create activity log
             ActivityLog.objects.create(
                 candidate=candidate,
                 event_type=ActivityLog.EventType.VIDEO_UPLOADED,
@@ -114,7 +112,6 @@ class VideoUploadView(APIView):
             
             return Response({'message': 'Video uploaded successfully'}, status=200)
         else:
-            # Failure: increment attempts and record time
             candidate.video_attempts += 1
             candidate.video_last_failed_attempt = timezone.now()
             candidate.save(update_fields=['video_attempts', 'video_last_failed_attempt'])
@@ -125,7 +122,6 @@ class VideoUploadView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-
 class CVUploadURLView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -135,19 +131,22 @@ class CVUploadURLView(APIView):
             return Response({'error': 'Not authorized'}, status=403)
         
         file_extension = request.data.get('file_extension', 'pdf').lower()
-        if file_extension not in ['pdf', 'docx']:
-            return Response({'error': 'Only PDF and DOCX files are supported.'}, status=400)
+        
+        allowed_formats = ['pdf', 'docx', 'png', 'jpg', 'jpeg']
+        if file_extension not in allowed_formats:
+            return Response({'error': 'Only PDF, DOCX, PNG, and JPG files are supported.'}, status=400)
 
-        # Map extension to MIME type
         content_type_map = {
             'pdf': 'application/pdf',
             'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'png': 'image/png',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
         }
         content_type = content_type_map.get(file_extension, 'application/octet-stream')
 
         file_key = f'cv/{candidate_id}/{uuid.uuid4()}.{file_extension}'
         
-        # Pass content_type to generate_signed_url
         signed_url = generate_signed_url(
             file_key, 
             method='put_object', 
@@ -165,15 +164,46 @@ class CVUploadConfirmView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, candidate_id):
+        import tempfile
+        import requests
+        import os
+        
         candidate = Candidate.objects.get(id=candidate_id)
         file_key = request.data.get('file_key')
-        filename = request.data.get('filename', '')
+        filename = request.data.get('filename', '')  
         if not file_key:
             return Response({'error': 'file_key required'}, status=400)
 
         candidate.cv_file = file_key
         candidate.cv_filename = filename
         candidate.cv_uploaded_at = timezone.now()
-        candidate.cv_status = 'uploaded'
-        candidate.save()      
+        candidate.cv_status = 'processing'
+        candidate.save()
+        
+        try:
+            from apps.candidate.services.text_extraction import extract_cv_text
+            
+            download_url = generate_signed_url(file_key, method='get_object', expires_in=300)
+            response = requests.get(download_url)
+            
+            file_ext = filename.split('.')[-1].lower()
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_ext}') as tmp:
+                tmp.write(response.content)
+                tmp_path = tmp.name
+            
+            extracted_text = extract_cv_text(tmp_path, file_ext)
+            
+            candidate.cv_text = extracted_text
+            candidate.cv_status = 'analyzed' if extracted_text else 'error'
+            candidate.save()
+            
+            os.unlink(tmp_path)
+            
+            logger.info(f"Text extracted from CV: {len(extracted_text)} chars")
+            
+        except Exception as e:
+            logger.error(f"Text extraction failed for candidate {candidate.id}: {e}")
+            candidate.cv_status = 'error'
+            candidate.save()
+        
         return Response({'status': 'CV uploaded successfully'})

@@ -97,11 +97,11 @@ docker-compose down
 ---
 
 ## Tech Stack
-- Python 3.13
+- Python 3.11+
 - Django 4.2
 - Django REST Framework
-- PostgreSQL (Supabase — shared dev + production)
-- Redis (local Docker for Celery/WebSocket)
+- SQLite (local development)
+- PostgreSQL (production — Heroku)
 
 ## Branch Strategy
 - main — production only
@@ -223,3 +223,100 @@ Cloudflare R2 is used for storing candidate CVs and other documents with zero eg
 - **Lifecycle:** Auto-delete after 365 days
 - **Free tier:** 10GB storage, 1M writes, 10M reads
 ```
+```
+### File Structure
+
+servia-cv-storage/
+└── cv/
+└── {candidate_id}/
+└── {uuid}.pdf
+
+
+### API Endpoints
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/candidates/candidates/{id}/upload-cv/` | POST | Returns signed URL for CV upload |
+| `/candidates/candidates/{id}/confirm-cv/` | POST | Confirms CV upload completion |
+
+### Upload Flow
+1. Request signed URL with `{"file_extension": "pdf"}`
+2. Upload file directly to R2 using signed URL (PUT, 15 min expiry)
+3. Confirm upload with file_key and filename
+
+### Security
+- Files are **private** – accessed only via signed URLs
+- Upload URLs expire in **15 minutes**
+- Download URLs generated on demand for authenticated users
+- Supported file types: PDF, DOCX (max 10MB)
+```
+```
+## Email Setup Guide
+Brevo SMTP is used for sending transactional emails including password reset, welcome, and application status notifications.
+
+### Configuration
+
+#### 1. Create Brevo Account
+- Sign up at [brevo.com](https://www.brevo.com)
+- Verify your email address
+
+#### 2. Get SMTP Credentials
+- Navigate to **SMTP & API** → **SMTP**
+- Generate an SMTP key
+- Copy your SMTP username and password
+
+#### 3. Environment Variables
+Add to `.env`:
+```bash
+# Brevo SMTP Settings
+EMAIL_HOST=smtp-relay.brevo.com
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_HOST_USER=a60c60001@smtp-brevo.com
+EMAIL_HOST_PASSWORD=your-smtp-key
+DEFAULT_FROM_EMAIL=meazi0716@gmail.com
+FRONTEND_URL=http://localhost:3000
+
+#### CV Text Extraction with OCR Fallback
+
+The CV upload system automatically extracts text from uploaded files. For PDF and DOCX files, direct text extraction is used. For images (PNG, JPG) and scanned PDFs, Tesseract OCR is used as a fallback to ensure text is extracted from all CV formats.
+
+### Supported File Types
+| Format | Extraction Method |
+|--------|-------------------|
+| PDF (text-based) | Direct extraction via pdfminer |
+| PDF (scanned/images) | OCR via Tesseract |
+| DOCX | Direct extraction via python-docx |
+| PNG, JPG, JPEG | OCR via Tesseract |
+
+### OCR Setup
+#### 1. Install Tesseract OCR
+
+**Windows:**
+1. Download from [UB Mannheim Tesseract](https://github.com/UB-Mannheim/tesseract/wiki)
+2. Install at `C:\Program Files\Tesseract-OCR\`
+3. Check "Language data" during installation
+
+**macOS:**
+```bash
+brew install tesseract
+```
+
+2. Install Python Packages
+```bash
+pip install pytesseract pillow pdf2image pdfminer.six 
+```
+
+3. Configure Tesseract Path in settings.py
+```bash
+# Tesseract OCR path
+TESSERACT_PATH = r'C:\Program Files\Tesseract-OCR\tesseract.exe
+```
+#### Text Extraction Flow
+1. CV uploaded via signed URL
+2. File is stored in Cloudflare R2
+3. Backend downloads file using signed URL
+4. Text extraction runs based on file type:
+- PDF/DOCX → direct text extraction
+- Images/scanned PDF → OCR via Tesseract
+5. Extracted text saved to `candidate.cv_text` field
+6. CV status updates to `processing` (ready for AI analysis)
