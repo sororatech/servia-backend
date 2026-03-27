@@ -20,6 +20,7 @@ class AIReportSerializer(serializers.Serializer):
     strengths = serializers.ListField(child=serializers.CharField())
     weaknesses = serializers.ListField(child=serializers.CharField())
     feedback = serializers.CharField()
+    extracted_skills = serializers.ListField(child=serializers.CharField(), default=list)
 
     def validate_fit_score(self, value):
         if not 0 <= value <= 100:
@@ -36,4 +37,9 @@ class AIReportSerializer(serializers.Serializer):
     def validate_weaknesses(self, value):
         if not isinstance(value, list):
             raise serializers.ValidationError("weaknesses must be a list")
+        return value
+
+    def validate_extracted_skills(self, value):
+        if not isinstance(value, list):
+            raise serializers.ValidationError("extracted_skills must be a list")
         return value

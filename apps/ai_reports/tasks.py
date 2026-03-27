@@ -50,11 +50,17 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str)
         )
 
         with transaction.atomic():
+            vd = serializer.validated_data
             report = AIReport.objects.create(
                 candidate=candidate,
                 report_type=AIReport.ReportType.CV_SCREENING,
                 raw_response=result,
-                **serializer.validated_data,
+                fit_score=vd['fit_score'],
+                summary=vd['summary'],
+                strengths=vd['strengths'],
+                weaknesses=vd['weaknesses'],
+                feedback=vd['feedback'],
+                extracted_skills=vd.get('extracted_skills') or [],
             )
 
             fit_score = serializer.validated_data['fit_score']
@@ -62,12 +68,13 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str)
             candidate.ai_summary = serializer.validated_data['summary']
             candidate.ai_strengths = serializer.validated_data['strengths']
             candidate.ai_weaknesses = serializer.validated_data['weaknesses']
+            candidate.ai_skills = serializer.validated_data.get('extracted_skills', [])
             candidate.ai_feedback = serializer.validated_data['feedback']
             candidate.cv_status = Candidate.CVStatus.ANALYZED
 
             update_fields = [
                 'ai_score', 'ai_summary', 'ai_strengths',
-                'ai_weaknesses', 'ai_feedback', 'cv_status', 'updated_at',
+                'ai_weaknesses', 'ai_skills', 'ai_feedback', 'cv_status', 'updated_at',
             ]
 
             if fit_score < 50:

@@ -9,8 +9,8 @@ load_dotenv()
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
 
 CV_SCREENING_PROMPT = """
-You are a hospitality recruitment expert. Evaluate this candidate's 
-CV against the job requirements.
+You are an expert recruiter. Evaluate this candidate's CV strictly
+against the provided job requirements.
 
 JOB REQUIREMENTS:
 {job_description}
@@ -24,13 +24,21 @@ Return a JSON object with:
     "summary": str (2-3 sentences),
     "strengths": [str],
     "weaknesses": [str],
-    "feedback": str (personalized message to candidate)
+    "feedback": str (personalized message to candidate),
+    "extracted_skills": [str] (list of specific skills, tools, technologies, and competencies found in the CV)
 }}
 
-Focus on: customer service experience, communication skills, 
-teamwork, professionalism, hotel experience.
+Derive your evaluation criteria entirely from the JOB REQUIREMENTS above.
+Weight job-specific skills and experience heavily. Generic soft skills
+(communication, teamwork) should only contribute if they are explicitly
+required by the job. A candidate with an unrelated background should
+score very low even if they have transferable soft skills.
 
-Return ONLY the JSON object — no extra text, no markdown, 
+For extracted_skills, list every concrete skill mentioned in the CV
+(e.g. "Python", "Project Management", "Adobe Photoshop", "Guest Relations").
+Return up to 20 skills.
+
+Return ONLY the JSON object — no extra text, no markdown,
 no code blocks.
 Keep the summary concise and return at most 4 strengths and 3 weaknesses.
 """
@@ -46,7 +54,7 @@ class GeminiResponseError(Exception):
 
 CV_SCREENING_RESPONSE_SCHEMA = {
     "type": "object",
-    "required": ["fit_score", "summary", "strengths", "weaknesses", "feedback"],
+    "required": ["fit_score", "summary", "strengths", "weaknesses", "feedback", "extracted_skills"],
     "properties": {
         "fit_score": {"type": "integer"},
         "summary": {"type": "string"},
@@ -59,6 +67,10 @@ CV_SCREENING_RESPONSE_SCHEMA = {
             "items": {"type": "string"},
         },
         "feedback": {"type": "string"},
+        "extracted_skills": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
     },
 }
 
@@ -127,7 +139,7 @@ def analyze_cv(cv_text: str, job_description: str, max_retries: int = 3) -> dict
             result = extract_json_object(response_text)
 
            
-            required_fields = ['fit_score', 'summary', 'strengths', 'weaknesses', 'feedback']
+            required_fields = ['fit_score', 'summary', 'strengths', 'weaknesses', 'feedback', 'extracted_skills']
             for field in required_fields:
                 if field not in result:
                     raise GeminiResponseError(f"Missing required field: {field}")
@@ -143,6 +155,8 @@ def analyze_cv(cv_text: str, job_description: str, max_retries: int = 3) -> dict
                 raise GeminiResponseError("strengths must be a list")
             if not isinstance(result['weaknesses'], list):
                 raise GeminiResponseError("weaknesses must be a list")
+            if not isinstance(result['extracted_skills'], list):
+                raise GeminiResponseError("extracted_skills must be a list")
 
             print(f"Gemini response received — fit_score: {result['fit_score']}")
             return result
