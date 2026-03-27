@@ -6,7 +6,7 @@ from rest_framework.exceptions import ValidationError
 from apps.ai_reports.models import AIReport, TemporaryAIResponse
 from apps.ai_reports.serializers import AIReportSerializer
 from apps.candidate.models import Candidate
-from apps.users.tasks import send_cv_analyzed_email, send_rejected_cv_email
+from apps.users.tasks import send_cv_analyzed_email, send_rejected_cv_email, send_shortlisted_email
 from apps.ai_reports.services.gemini_client import (
     GeminiConfigurationError,
     GeminiResponseError,
@@ -25,6 +25,13 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str)
         candidate = Candidate.objects.filter(id=candidate_id).first()
         if not candidate:
             raise ObjectDoesNotExist(f"Candidate {candidate_id} does not exist.")
+
+        if AIReport.objects.filter(
+            candidate=candidate,
+            report_type=AIReport.ReportType.CV_SCREENING,
+        ).exists():
+            print(f"AIReport already exists for candidate {candidate_id} — skipping duplicate analysis.")
+            return {'candidate_id': candidate_id, 'status': 'skipped', 'reason': 'report_already_exists'}
 
         self.update_state(
             state='PROGRESS',
@@ -77,15 +84,23 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str)
                 'ai_weaknesses', 'ai_skills', 'ai_feedback', 'cv_status', 'updated_at',
             ]
 
-            if fit_score < 50:
+            if fit_score >= 70:
+                candidate.status = Candidate.Status.SHORTLISTED
+                update_fields.append('status')
+            elif fit_score < 40:
                 candidate.status = Candidate.Status.REJECTED_CV
+                update_fields.append('status')
+            else:
+                candidate.status = Candidate.Status.SCREENED  # Manual review
                 update_fields.append('status')
 
             candidate.save(update_fields=update_fields)
 
-        if fit_score < 50:
+        if candidate.status == Candidate.Status.SHORTLISTED:
+            send_shortlisted_email.delay(candidate_id)
+        elif candidate.status == Candidate.Status.REJECTED_CV:
             send_rejected_cv_email.delay(candidate_id)
-        else:
+        elif candidate.status == Candidate.Status.SCREENED:
             send_cv_analyzed_email.delay(candidate_id)
         print(f"CV analysis complete for candidate {candidate_id} — score: {result['fit_score']}")
 

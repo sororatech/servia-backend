@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import time
 import google.generativeai as genai
@@ -97,88 +98,111 @@ def extract_json_object(response_text: str) -> dict:
         return json.loads(cleaned_text[start_index:end_index + 1])
 
 
-def get_gemini_client():
-    """Get configured Gemini Flash model."""
+PRIMARY_MODEL = 'gemini-2.5-flash'
+FALLBACK_MODEL = 'gemini-2.5-pro'
+
+
+def _strip_pii(text: str) -> str:
+    """Remove PII before sending to AI."""
+    # Remove email addresses
+    text = re.sub(r'[\w.-]+@[\w.-]+', '[EMAIL]', text)
+    # Remove phone numbers (E.164 + common formats)
+    text = re.sub(r'\+?\d{1,3}[-.\s]?(?:\d{1,4})?[-.\s]?\d{1,4}[-.\s]?\d{1,9}', '[PHONE]', text)
+    # Remove full names (basic heuristic: Capitalized words after "Name:" or at start)
+    text = re.sub(r'(?i)(name:\s*)[A-Z][a-z]+\s+[A-Z][a-z]+', r'\1[NAME]', text)
+    return text
+
+
+def get_gemini_client(model: str = PRIMARY_MODEL):
+    """Get configured Gemini model."""
     if not os.getenv('GEMINI_API_KEY'):
         raise GeminiConfigurationError("GEMINI_API_KEY is not configured.")
-    return genai.GenerativeModel('gemini-2.5-flash')
+    return genai.GenerativeModel(model)
+
+
+def _call_model(model, prompt: str) -> dict:
+    """Send prompt to a Gemini model and return validated result dict."""
+    response = model.generate_content(
+        prompt,
+        generation_config=genai.types.GenerationConfig(
+            temperature=0,
+            max_output_tokens=8192,
+            response_mime_type="application/json",
+            response_schema=CV_SCREENING_RESPONSE_SCHEMA,
+        ),
+        request_options={'timeout': 30}
+    )
+
+    result = extract_json_object(response.text.strip())
+
+    required_fields = ['fit_score', 'summary', 'strengths', 'weaknesses', 'feedback', 'extracted_skills']
+    for field in required_fields:
+        if field not in result:
+            raise GeminiResponseError(f"Missing required field: {field}")
+
+    if not isinstance(result['fit_score'], int) or not 0 <= result['fit_score'] <= 100:
+        raise GeminiResponseError(f"fit_score must be integer 0-100, got: {result['fit_score']}")
+
+    if not isinstance(result['strengths'], list):
+        raise GeminiResponseError("strengths must be a list")
+    if not isinstance(result['weaknesses'], list):
+        raise GeminiResponseError("weaknesses must be a list")
+    if not isinstance(result['extracted_skills'], list):
+        raise GeminiResponseError("extracted_skills must be a list")
+
+    return result
 
 
 def analyze_cv(cv_text: str, job_description: str, max_retries: int = 3) -> dict:
     """
-    Send CV text to Gemini Flash for analysis.
+    Send CV text to Gemini for analysis.
+    Tries the primary model (Flash) with retries, then falls back to the Pro model on API failures.
     Returns parsed JSON response.
     """
-    model = get_gemini_client()
+    cv_text = _strip_pii(cv_text)
     prompt = CV_SCREENING_PROMPT.format(
         job_description=job_description,
         cv_text=cv_text
     )
 
     last_error = None
+    api_failure = False  # tracks whether failure was an API error (not a validation error)
+
+    primary_model = get_gemini_client(PRIMARY_MODEL)
 
     for attempt in range(max_retries):
         try:
-            print(f"Gemini API attempt {attempt + 1}/{max_retries}")
-
-            response = model.generate_content(
-                prompt,
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0,
-                    max_output_tokens=8192,
-                    response_mime_type="application/json",
-                    response_schema=CV_SCREENING_RESPONSE_SCHEMA,
-                ),
-                request_options={'timeout': 30}
-            )
-
-           
-            response_text = response.text.strip()
-
-           
-            result = extract_json_object(response_text)
-
-           
-            required_fields = ['fit_score', 'summary', 'strengths', 'weaknesses', 'feedback', 'extracted_skills']
-            for field in required_fields:
-                if field not in result:
-                    raise GeminiResponseError(f"Missing required field: {field}")
-
-           
-            if not isinstance(result['fit_score'], int) or not 0 <= result['fit_score'] <= 100:
-                raise GeminiResponseError(
-                    f"fit_score must be integer 0-100, got: {result['fit_score']}"
-                )
-
-         
-            if not isinstance(result['strengths'], list):
-                raise GeminiResponseError("strengths must be a list")
-            if not isinstance(result['weaknesses'], list):
-                raise GeminiResponseError("weaknesses must be a list")
-            if not isinstance(result['extracted_skills'], list):
-                raise GeminiResponseError("extracted_skills must be a list")
-
+            print(f"Gemini API attempt {attempt + 1}/{max_retries} (model: {PRIMARY_MODEL})")
+            result = _call_model(primary_model, prompt)
             print(f"Gemini response received — fit_score: {result['fit_score']}")
             return result
 
-        except json.JSONDecodeError as e:
-            last_error = f"JSON parse error: {e}"
-            print(f"Attempt {attempt + 1} failed: {last_error}")
-
-        except GeminiResponseError as e:
-            last_error = f"Validation error: {e}"
-            print(f"Attempt {attempt + 1} failed: {last_error}")
+        except (json.JSONDecodeError, GeminiResponseError) as e:
+            last_error = str(e)
+            api_failure = False
+            print(f"Attempt {attempt + 1} failed (validation): {last_error}")
 
         except GeminiConfigurationError:
             raise
 
         except Exception as e:
-            last_error = f"API error: {e}"
-            print(f"Attempt {attempt + 1} failed: {last_error}")
+            last_error = str(e)
+            api_failure = True
+            print(f"Attempt {attempt + 1} failed (API error): {last_error}")
 
-      
         if attempt < max_retries - 1:
             time.sleep(2 ** attempt)
+
+    if api_failure:
+        print(f"Primary model exhausted — falling back to {FALLBACK_MODEL}")
+        try:
+            fallback_model = get_gemini_client(FALLBACK_MODEL)
+            result = _call_model(fallback_model, prompt)
+            print(f"Fallback model succeeded — fit_score: {result['fit_score']}")
+            return result
+        except Exception as e:
+            last_error = str(e)
+            print(f"Fallback model also failed: {last_error}")
 
     raise GeminiResponseError(
         f"Gemini API failed after {max_retries} attempts. Last error: {last_error}"
