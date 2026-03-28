@@ -1,5 +1,9 @@
+import logging
+
 from celery import shared_task
 from django.core.exceptions import ObjectDoesNotExist
+
+logger = logging.getLogger(__name__)
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
 
@@ -20,7 +24,7 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str)
     Background Celery task to analyze a candidate CV using Gemini Flash.
     """
     try:
-        print(f"Starting CV analysis for candidate {candidate_id}")
+        logger.info(f"Starting CV analysis for candidate {candidate_id}")
 
         candidate = Candidate.objects.filter(id=candidate_id).first()
         if not candidate:
@@ -30,7 +34,7 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str)
             candidate=candidate,
             report_type=AIReport.ReportType.CV_SCREENING,
         ).exists():
-            print(f"AIReport already exists for candidate {candidate_id} — skipping duplicate analysis.")
+            logger.info(f"AIReport already exists for candidate {candidate_id} — skipping duplicate analysis.")
             return {'candidate_id': candidate_id, 'status': 'skipped', 'reason': 'report_already_exists'}
 
         self.update_state(
@@ -91,7 +95,7 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str)
                 candidate.status = Candidate.Status.REJECTED_CV
                 update_fields.append('status')
             else:
-                candidate.status = Candidate.Status.SCREENED  # Manual review
+                candidate.status = Candidate.Status.SCREENED  
                 update_fields.append('status')
 
             candidate.save(update_fields=update_fields)
@@ -102,7 +106,7 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str)
             send_rejected_cv_email.delay(candidate_id)
         elif candidate.status == Candidate.Status.SCREENED:
             send_cv_analyzed_email.delay(candidate_id)
-        print(f"CV analysis complete for candidate {candidate_id} — score: {result['fit_score']}")
+        logger.info(f"CV analysis complete for candidate {candidate_id} — score: {result['fit_score']}")
 
         return {
             'candidate_id': candidate_id,
@@ -127,11 +131,11 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str)
             state='FAILURE',
             meta={'candidate_id': candidate_id, 'status': 'failed', 'error': str(e)}
         )
-        print(f"CV analysis failed validation/config for candidate {candidate_id}: {e}")
+        logger.error(f"CV analysis failed validation/config for candidate {candidate_id}: {e}")
         raise
 
     except Exception as e:
-        print(f"CV analysis failed for candidate {candidate_id}: {e}")
+        logger.error(f"CV analysis failed for candidate {candidate_id}: {e}")
         if self.request.retries >= self.max_retries:
             candidate = Candidate.objects.filter(id=candidate_id).first()
             if candidate:

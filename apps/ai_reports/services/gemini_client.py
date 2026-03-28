@@ -2,8 +2,11 @@ import os
 import re
 import json
 import time
+import logging
 import google.generativeai as genai
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -104,11 +107,8 @@ FALLBACK_MODEL = 'gemini-2.5-pro'
 
 def _strip_pii(text: str) -> str:
     """Remove PII before sending to AI."""
-    # Remove email addresses
     text = re.sub(r'[\w.-]+@[\w.-]+', '[EMAIL]', text)
-    # Remove phone numbers (E.164 + common formats)
     text = re.sub(r'\+?\d{1,3}[-.\s]?(?:\d{1,4})?[-.\s]?\d{1,4}[-.\s]?\d{1,9}', '[PHONE]', text)
-    # Remove full names (basic heuristic: Capitalized words after "Name:" or at start)
     text = re.sub(r'(?i)(name:\s*)[A-Z][a-z]+\s+[A-Z][a-z]+', r'\1[NAME]', text)
     return text
 
@@ -166,21 +166,21 @@ def analyze_cv(cv_text: str, job_description: str, max_retries: int = 3) -> dict
     )
 
     last_error = None
-    api_failure = False  # tracks whether failure was an API error (not a validation error)
+    api_failure = False  
 
     primary_model = get_gemini_client(PRIMARY_MODEL)
 
     for attempt in range(max_retries):
         try:
-            print(f"Gemini API attempt {attempt + 1}/{max_retries} (model: {PRIMARY_MODEL})")
+            logger.info(f"Gemini API attempt {attempt + 1}/{max_retries} (model: {PRIMARY_MODEL})")
             result = _call_model(primary_model, prompt)
-            print(f"Gemini response received — fit_score: {result['fit_score']}")
+            logger.info(f"Gemini response received — fit_score: {result['fit_score']}")
             return result
 
         except (json.JSONDecodeError, GeminiResponseError) as e:
             last_error = str(e)
             api_failure = False
-            print(f"Attempt {attempt + 1} failed (validation): {last_error}")
+            logger.warning(f"Attempt {attempt + 1} failed (validation): {last_error}")
 
         except GeminiConfigurationError:
             raise
@@ -188,21 +188,21 @@ def analyze_cv(cv_text: str, job_description: str, max_retries: int = 3) -> dict
         except Exception as e:
             last_error = str(e)
             api_failure = True
-            print(f"Attempt {attempt + 1} failed (API error): {last_error}")
+            logger.warning(f"Attempt {attempt + 1} failed (API error): {last_error}")
 
         if attempt < max_retries - 1:
             time.sleep(2 ** attempt)
 
     if api_failure:
-        print(f"Primary model exhausted — falling back to {FALLBACK_MODEL}")
+        logger.warning(f"Primary model exhausted — falling back to {FALLBACK_MODEL}")
         try:
             fallback_model = get_gemini_client(FALLBACK_MODEL)
             result = _call_model(fallback_model, prompt)
-            print(f"Fallback model succeeded — fit_score: {result['fit_score']}")
+            logger.info(f"Fallback model succeeded — fit_score: {result['fit_score']}")
             return result
         except Exception as e:
             last_error = str(e)
-            print(f"Fallback model also failed: {last_error}")
+            logger.error(f"Fallback model also failed: {last_error}")
 
     raise GeminiResponseError(
         f"Gemini API failed after {max_retries} attempts. Last error: {last_error}"
