@@ -36,7 +36,9 @@ def send_welcome_email(user_id):
 def send_shortlisted_email(candidate_id):
     from apps.candidate.models import Candidate
     candidate = Candidate.objects.get(id=candidate_id)
-    context = {'candidate': candidate}
+    base_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+    video_upload_url = f"{base_url}/dashboard/video-upload"
+    context = {'candidate': candidate, 'video_upload_url': video_upload_url}
     html_message = render_to_string('email/shortlisted.html', context)
     send_mail(
         subject="You've been shortlisted!",

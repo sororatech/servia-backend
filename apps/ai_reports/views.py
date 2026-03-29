@@ -5,11 +5,11 @@ Write operations are restricted to admin recruiters (system internal use).
 """
 from rest_framework import viewsets, permissions
 from .models import AIReport, TemporaryAIResponse
-from .serializers import AIReportSerializer, TemporaryAIResponseSerializer
+from .serializers import AIReportModelSerializer, TemporaryAIResponseSerializer
 from apps.users.permissions import IsRecruiter, IsAdminRecruiter
 
 class AIReportViewSet(viewsets.ModelViewSet):
-    serializer_class = AIReportSerializer
+    serializer_class = AIReportModelSerializer
     permission_classes = [permissions.IsAuthenticated]
     queryset = AIReport.objects.none()            # required for router
 
