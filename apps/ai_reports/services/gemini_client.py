@@ -200,6 +200,81 @@ INTERVIEW_ANALYSIS_SCHEMA = {
     },
 }
 
+FOLLOW_UP_RESPONSE_SCHEMA = {
+    "type": "array",
+    "items": {"type": "string"},
+}
+
+
+def _extract_questions_from_text(text: str) -> list:
+    """Best-effort extraction for non-JSON Gemini follow-up responses."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return []
+
+    if cleaned.startswith("```"):
+        parts = cleaned.split("```")
+        if len(parts) >= 2:
+            cleaned = parts[1]
+        if cleaned.startswith("json"):
+            cleaned = cleaned[4:]
+        cleaned = cleaned.strip()
+
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+        if isinstance(parsed, dict):
+            questions = parsed.get("questions")
+            if isinstance(questions, list):
+                return [str(item).strip() for item in questions if str(item).strip()]
+    except Exception:
+        pass
+
+    question_candidates = re.findall(r'[^?]*\?', cleaned)
+    normalized = []
+    for question in question_candidates:
+        question = question.strip(" \n\r\t-`\"'")
+        if question:
+            normalized.append(question)
+    return normalized
+
+
+def _fallback_follow_up_questions(candidate_text: str, context: list | None = None) -> list:
+    """Generate reasonable probing questions when Gemini is unavailable."""
+    text = re.sub(r"\s+", " ", (candidate_text or "").strip())
+    if not text:
+        return []
+
+    keyword_patterns = [
+        (r"\b(team|managed|supervised|led|trained)\b", "Can you share a specific example of how you led or supported your team and what result came from it?"),
+        (r"\b(guest|customer|complaint|escalation|service)\b", "Tell me about a difficult guest situation you handled personally. What did you do, and what was the outcome?"),
+        (r"\b(opera|pms|system|software|tool|excel|pos)\b", "How have you used those systems or tools in day-to-day work, and which tasks were you personally responsible for?"),
+        (r"\b(sales|revenue|booking|occupancy|upsell)\b", "Can you give a concrete example of how your work improved bookings, revenue, or guest experience?"),
+        (r"\b(training|mentor|onboard)\b", "What approach did you use when training new team members, and how did you know the training was effective?"),
+        (r"\b(conflict|pressure|busy|peak|deadline)\b", "Describe a high-pressure moment in that role. How did you prioritize, and what was the result?"),
+    ]
+
+    questions = []
+    for pattern, question in keyword_patterns:
+        if re.search(pattern, text, re.IGNORECASE) and question not in questions:
+            questions.append(question)
+        if len(questions) == 3:
+            return questions
+
+    generic_questions = [
+        "Can you walk me through one specific example that shows this experience in practice?",
+        "What was your exact responsibility in that situation, and how did you measure success?",
+        "What did you learn from that experience, and how would you apply it in this role?",
+    ]
+    for question in generic_questions:
+        if question not in questions:
+            questions.append(question)
+        if len(questions) == 3:
+            break
+
+    return questions[:3]
+
 
 def generate_follow_up_questions(candidate_text: str, context: list) -> list:
     """
@@ -222,22 +297,20 @@ def generate_follow_up_questions(candidate_text: str, context: list) -> list:
         response = model.generate_content(
             prompt,
             generation_config=genai.types.GenerationConfig(
-                temperature=0.3,
-                max_output_tokens=512,
+                temperature=0,
+                max_output_tokens=256,
+                response_mime_type="application/json",
+                response_schema=FOLLOW_UP_RESPONSE_SCHEMA,
             ),
             request_options={'timeout': 10},
         )
-        text = response.text.strip()
-        if text.startswith("```"):
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        questions = json.loads(text.strip())
-        if isinstance(questions, list):
+        questions = _extract_questions_from_text(getattr(response, "text", ""))
+        if len(questions) >= 3:
             return questions[:3]
+        raise GeminiResponseError("Gemini returned fewer than 3 follow-up questions.")
     except Exception as e:
         logger.error(f"generate_follow_up_questions error: {e}")
-    return []
+    return _fallback_follow_up_questions(candidate_text, context)
 
 
 def analyze_interview(transcripts: list) -> dict:

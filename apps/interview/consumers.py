@@ -1,6 +1,8 @@
 import json
 import logging
 import re
+import uuid
+import asyncio
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import timezone
@@ -21,7 +23,15 @@ class InterviewConsumer(AsyncWebsocketConsumer):
     MIN_NEW_WORDS_FOR_REFRESH = 8
 
     async def connect(self):
-        self.interview_id = self.scope["url_route"]["kwargs"]["interview_id"]
+        raw_interview_id = self.scope["url_route"]["kwargs"]["interview_id"]
+        try:
+            self.interview_id = str(uuid.UUID(str(raw_interview_id)))
+        except (TypeError, ValueError):
+            logger.warning("Rejected websocket connection with invalid interview ID: %s", raw_interview_id)
+            await self.accept()
+            await self.close(code=4400)
+            return
+
         self.group_name = f"interview_{self.interview_id}"
         self.candidate_live_buffer = ""
         self.last_follow_up_buffer = ""
@@ -93,6 +103,11 @@ class InterviewConsumer(AsyncWebsocketConsumer):
                     context = await self._get_candidate_context(candidate_text)
                     questions = await self._generate_follow_ups(candidate_text, context)
                     if questions:
+                        logger.info(
+                            "Emitting follow-up questions for interview %s: %s",
+                            self.interview_id,
+                            questions,
+                        )
                         self.last_follow_up_buffer = candidate_text
                         await self._broadcast_event(
                             event_type="follow_up_questions",
@@ -117,6 +132,11 @@ class InterviewConsumer(AsyncWebsocketConsumer):
                 return
 
             questions = await self._generate_follow_ups(candidate_text, context)
+            logger.info(
+                "Emitting manual follow-up questions for interview %s: %s",
+                self.interview_id,
+                questions,
+            )
             await self._broadcast_event(
                 event_type="follow_up_questions",
                 payload={
@@ -365,9 +385,12 @@ class InterviewConsumer(AsyncWebsocketConsumer):
             },
         )
 
-    @database_sync_to_async
-    def _generate_follow_ups(self, candidate_text, context):
-        return generate_follow_up_questions(candidate_text, context)
+    async def _generate_follow_ups(self, candidate_text, context):
+        return await asyncio.to_thread(
+            generate_follow_up_questions,
+            candidate_text,
+            context,
+        )
 
     @database_sync_to_async
     def _analyze_interview(self, transcripts):
