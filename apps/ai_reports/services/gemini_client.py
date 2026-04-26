@@ -153,6 +153,212 @@ def _call_model(model, prompt: str) -> dict:
     return result
 
 
+FOLLOW_UP_PROMPT = """You are an expert interview assistant for the hospitality recruitment industry.
+
+{context_block}The candidate just said:
+"{candidate_text}"
+
+Generate exactly 3 sharp follow-up interview questions based on this specific response.
+Questions should probe deeper — ask for concrete examples, clarify vague claims, or test the depth of stated skills.
+
+Return ONLY a valid JSON array of 3 strings. No explanation, no markdown.
+Example: ["Question 1?", "Question 2?", "Question 3?"]"""
+
+INTERVIEW_ANALYSIS_PROMPT = """You are an expert recruitment analyst for the hospitality industry.
+
+Below are all of the candidate's responses during the interview (numbered chronologically):
+
+{candidate_transcript}
+
+Analyse the candidate's overall performance and return a JSON object with exactly these fields:
+{{
+    "fit_score": <integer 0-100>,
+    "summary": "<2-3 sentence overall assessment>",
+    "strengths": ["strength1", "strength2", "strength3"],
+    "weaknesses": ["weakness1", "weakness2"],
+    "feedback": "<personalised 2-3 sentence feedback message addressed directly to the candidate>",
+    "extracted_skills": ["skill1", "skill2", ...],
+    "recommendation": "<hire|hold|reject>",
+    "confidence": "<high|medium|low>"
+}}
+
+Return ONLY valid JSON — no markdown, no code blocks, no explanation."""
+
+INTERVIEW_ANALYSIS_SCHEMA = {
+    "type": "object",
+    "required": ["fit_score", "summary", "strengths", "weaknesses", "feedback",
+                 "extracted_skills", "recommendation", "confidence"],
+    "properties": {
+        "fit_score":        {"type": "integer"},
+        "summary":          {"type": "string"},
+        "strengths":        {"type": "array", "items": {"type": "string"}},
+        "weaknesses":       {"type": "array", "items": {"type": "string"}},
+        "feedback":         {"type": "string"},
+        "extracted_skills": {"type": "array", "items": {"type": "string"}},
+        "recommendation":   {"type": "string"},
+        "confidence":       {"type": "string"},
+    },
+}
+
+FOLLOW_UP_RESPONSE_SCHEMA = {
+    "type": "array",
+    "items": {"type": "string"},
+}
+
+
+def _extract_questions_from_text(text: str) -> list:
+    """Best-effort extraction for non-JSON Gemini follow-up responses."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return []
+
+    if cleaned.startswith("```"):
+        parts = cleaned.split("```")
+        if len(parts) >= 2:
+            cleaned = parts[1]
+        if cleaned.startswith("json"):
+            cleaned = cleaned[4:]
+        cleaned = cleaned.strip()
+
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+        if isinstance(parsed, dict):
+            questions = parsed.get("questions")
+            if isinstance(questions, list):
+                return [str(item).strip() for item in questions if str(item).strip()]
+    except Exception:
+        pass
+
+    question_candidates = re.findall(r'[^?]*\?', cleaned)
+    normalized = []
+    for question in question_candidates:
+        question = question.strip(" \n\r\t-`\"'")
+        if question:
+            normalized.append(question)
+    return normalized
+
+
+def _fallback_follow_up_questions(candidate_text: str, context: list | None = None) -> list:
+    """Generate reasonable probing questions when Gemini is unavailable."""
+    text = re.sub(r"\s+", " ", (candidate_text or "").strip())
+    if not text:
+        return []
+
+    keyword_patterns = [
+        (r"\b(team|managed|supervised|led|trained)\b", "Can you share a specific example of how you led or supported your team and what result came from it?"),
+        (r"\b(guest|customer|complaint|escalation|service)\b", "Tell me about a difficult guest situation you handled personally. What did you do, and what was the outcome?"),
+        (r"\b(opera|pms|system|software|tool|excel|pos)\b", "How have you used those systems or tools in day-to-day work, and which tasks were you personally responsible for?"),
+        (r"\b(sales|revenue|booking|occupancy|upsell)\b", "Can you give a concrete example of how your work improved bookings, revenue, or guest experience?"),
+        (r"\b(training|mentor|onboard)\b", "What approach did you use when training new team members, and how did you know the training was effective?"),
+        (r"\b(conflict|pressure|busy|peak|deadline)\b", "Describe a high-pressure moment in that role. How did you prioritize, and what was the result?"),
+    ]
+
+    questions = []
+    for pattern, question in keyword_patterns:
+        if re.search(pattern, text, re.IGNORECASE) and question not in questions:
+            questions.append(question)
+        if len(questions) == 3:
+            return questions
+
+    generic_questions = [
+        "Can you walk me through one specific example that shows this experience in practice?",
+        "What was your exact responsibility in that situation, and how did you measure success?",
+        "What did you learn from that experience, and how would you apply it in this role?",
+    ]
+    for question in generic_questions:
+        if question not in questions:
+            questions.append(question)
+        if len(questions) == 3:
+            break
+
+    return questions[:3]
+
+
+def generate_follow_up_questions(candidate_text: str, context: list) -> list:
+    """
+    Called after each candidate response during a live interview.
+    Returns a list of 3 follow-up questions, or [] on failure.
+    Uses Flash model for low latency.
+    """
+    context_block = ""
+    if len(context) > 1:
+        prior = "\n".join(f"- {t}" for t in context[:-1])
+        context_block = f"Previous candidate responses for context:\n{prior}\n\n"
+
+    prompt = FOLLOW_UP_PROMPT.format(
+        context_block=context_block,
+        candidate_text=candidate_text,
+    )
+
+    try:
+        model = get_gemini_client(PRIMARY_MODEL)
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                temperature=0,
+                max_output_tokens=256,
+                response_mime_type="application/json",
+                response_schema=FOLLOW_UP_RESPONSE_SCHEMA,
+            ),
+            request_options={'timeout': 10},
+        )
+        questions = _extract_questions_from_text(getattr(response, "text", ""))
+        if len(questions) >= 3:
+            return questions[:3]
+        raise GeminiResponseError("Gemini returned fewer than 3 follow-up questions.")
+    except Exception as e:
+        logger.error(f"generate_follow_up_questions error: {e}")
+    return _fallback_follow_up_questions(candidate_text, context)
+
+
+def analyze_interview(transcripts: list) -> dict:
+    """
+    Called once when the meeting ends.
+    transcripts: list of dicts with keys speaker, text, start_time, end_time.
+    Returns a dict matching the AIReport model fields, or {} on failure.
+    """
+    candidate_lines = [
+        f"[{i + 1}] {seg['text']}"
+        for i, seg in enumerate(transcripts)
+        if seg.get('speaker') == 'candidate'
+    ]
+
+    if not candidate_lines:
+        logger.warning("analyze_interview called with no candidate lines — skipping")
+        return {}
+
+    prompt = INTERVIEW_ANALYSIS_PROMPT.format(
+        candidate_transcript="\n".join(candidate_lines)
+    )
+
+    last_error = None
+    for model_name in (PRIMARY_MODEL, FALLBACK_MODEL):
+        try:
+            model = get_gemini_client(model_name)
+            response = model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0,
+                    max_output_tokens=2048,
+                    response_mime_type="application/json",
+                    response_schema=INTERVIEW_ANALYSIS_SCHEMA,
+                ),
+                request_options={'timeout': 30},
+            )
+            result = extract_json_object(response.text.strip())
+            logger.info(f"Interview analysis complete — score: {result.get('fit_score')}, "
+                        f"recommendation: {result.get('recommendation')}")
+            return result
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"analyze_interview failed with {model_name}: {e}")
+
+    logger.error(f"analyze_interview exhausted all models. Last error: {last_error}")
+    return {}
+
+
 def analyze_cv(cv_text: str, job_description: str, max_retries: int = 3) -> dict:
     """
     Send CV text to Gemini for analysis.
