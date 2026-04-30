@@ -50,6 +50,7 @@ class Candidate(models.Model):
     ai_summary = models.TextField(blank=True, null=True)
     ai_strengths = models.JSONField(default=list)
     ai_weaknesses = models.JSONField(default=list)
+    ai_skills = models.JSONField(default=list)
     ai_feedback = models.TextField(blank=True, null=True)
     ai_confidence = models.CharField(max_length=10, choices=Confidence.choices, blank=True, null=True)
 

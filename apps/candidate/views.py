@@ -205,11 +205,29 @@ class CVUploadConfirmView(APIView):
             candidate.cv_text = extracted_text
             candidate.cv_status = 'processing'
             candidate.save()
-            
+
             os.unlink(tmp_path)
-            
+
+            job = candidate.job
+            job_description = (
+                f"Job Title: {job.title}\n\n"
+                f"Description:\n{job.description}\n\n"
+                f"Requirements:\n{job.requirements}"
+            )
+
+            from apps.ai_reports.tasks import analyze_cv_task
+            analyze_cv_task.delay(str(candidate.id), extracted_text, job_description)
+
+            ActivityLog.objects.create(
+                candidate=candidate,
+                event_type=ActivityLog.EventType.CV_UPLOADED,
+                note="CV uploaded and queued for AI analysis",
+                created_by_type=ActivityLog.CreatedByType.CANDIDATE,
+                created_by_id=request.user.id,
+            )
+
         except Exception as e:
             candidate.cv_status = 'error'
             candidate.save()
-        
+
         return Response({'status': 'CV uploaded successfully', 'cv_status': 'processing'})

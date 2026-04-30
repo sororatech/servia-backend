@@ -17,6 +17,7 @@ DEBUG = os.getenv('DEBUG', 'False') == 'True'
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',')
 
 INSTALLED_APPS = [
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -36,6 +37,8 @@ INSTALLED_APPS = [
     'apps.reporting',
     'django_rest_passwordreset',
     'drf_spectacular',
+    'django_celery_results',
+
 ]
 
 MIDDLEWARE = [
@@ -166,15 +169,6 @@ SPECTACULAR_SETTINGS = {
     'SERVE_INCLUDE_SCHEMA': False,
 }
 
-# Celery
-CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')
-CELERY_RESULT_BACKEND = os.getenv('REDIS_URL', 'redis://localhost:6379')
-CELERY_ACCEPT_CONTENT = ['json']
-CELERY_TASK_SERIALIZER = 'json'
-CELERY_RESULT_SERIALIZER = 'json'
-CELERY_TIMEZONE = 'UTC'
-
-
 # Cloudflare R2 Settings (required for CV storage)
 CLOUDFLARE_R2_ACCESS_KEY = os.environ.get('CLOUDFLARE_R2_ACCESS_KEY')
 CLOUDFLARE_R2_SECRET_KEY = os.environ.get('CLOUDFLARE_R2_SECRET_KEY')
@@ -211,3 +205,11 @@ FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
 
 # Tesseract OCR path
 TESSERACT_PATH = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
+# Celery Config (add to settings.py)
+CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://redis:6379/0')
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'Africa/Nairobi'
+CELERY_RESULT_BACKEND = 'django-db'

@@ -1,10 +1,11 @@
 from rest_framework import viewsets, permissions
+from django.db.models import Count
 from .models import Job
 from .serializers import JobSerializer
 from apps.users.permissions import IsRecruiter
 
 class JobViewSet(viewsets.ModelViewSet):
-    queryset = Job.objects.all()
+    queryset = Job.objects.annotate(candidate_count=Count('candidate'))
     serializer_class = JobSerializer
 
     def get_permissions(self):

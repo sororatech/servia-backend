@@ -66,7 +66,9 @@ def send_shortlisted_email(candidate_id):
         return
     
     try:
-        context = {'candidate': candidate}
+        base_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+        video_upload_url = f"{base_url}/dashboard/video-upload"
+        context = {'candidate': candidate, 'video_upload_url': video_upload_url}
         html_message = render_to_string('email/shortlisted.html', context)
         send_mail(
             subject="You've been shortlisted!",
@@ -79,7 +81,6 @@ def send_shortlisted_email(candidate_id):
         logger.info(f"Shortlisted email sent to candidate {candidate_id}")
     except Exception as e:
         logger.error(f"Failed to send shortlisted email to candidate {candidate_id}: {str(e)}")
-
 
 @shared_task
 def send_rejected_cv_email(candidate_id):
