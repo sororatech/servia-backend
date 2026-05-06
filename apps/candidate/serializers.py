@@ -3,7 +3,7 @@ from django.contrib.auth.models import User
 from .models import Candidate, ActivityLog
 import boto3
 from django.conf import settings
-
+from botocore.config import Config
 
 class UserBasicSerializer(serializers.ModelSerializer):
     """
@@ -33,11 +33,17 @@ class CandidateSerializer(serializers.ModelSerializer):
             return None
         
         try:
+            r2_config = Config(
+                signature_version='s3v4',  
+                region_name='auto',         
+            )
+            
             r2_client = boto3.client(
                 's3',
                 endpoint_url=settings.CLOUDFLARE_R2_ENDPOINT,
                 aws_access_key_id=settings.CLOUDFLARE_R2_ACCESS_KEY,
                 aws_secret_access_key=settings.CLOUDFLARE_R2_SECRET_KEY,
+                config=r2_config, 
             )
             
             url = r2_client.generate_presigned_url(

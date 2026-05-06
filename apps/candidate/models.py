@@ -1,5 +1,5 @@
 import uuid
-from django.conf import settings                      # <-- import settings
+from django.conf import settings                      
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
 from apps.job.models import Job
@@ -13,6 +13,7 @@ class Candidate(models.Model):
         INTERVIEW_SCHEDULED = 'interview_scheduled', 'Interview Scheduled'
         INTERVIEWED = 'interviewed', 'Interviewed'
         OFFERED = 'offered', 'Offered'
+        HIRED = 'hired', 'Hired'
         REJECTED_CV = 'rejected_cv', 'Rejected CV'
         REJECTED_INTERVIEW = 'rejected_interview', 'Rejected Interview'
         HOLD = 'hold', 'Hold'
