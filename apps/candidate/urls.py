@@ -5,6 +5,7 @@ from . import views
 router = DefaultRouter()
 router.register(r'candidates', views.CandidateViewSet)
 router.register(r'activities', views.ActivityLogViewSet)
+router.register(r'my-applications', views.MyApplicationsViewSet, basename='my-applications')
 
 urlpatterns = [
     path('candidates/<uuid:candidate_id>/upload-cv/', views.CVUploadURLView.as_view(), name='upload-cv-url'),

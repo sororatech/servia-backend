@@ -3,7 +3,7 @@ import logging
 from rest_framework import viewsets, permissions
 from rest_framework.exceptions import PermissionDenied
 from .models import Candidate, ActivityLog
-from .serializers import CandidateSerializer, ActivityLogSerializer
+from .serializers import CandidateSerializer, ActivityLogSerializer, MyApplicationSerializer
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -231,3 +231,28 @@ class CVUploadConfirmView(APIView):
             candidate.save()
 
         return Response({'status': 'CV uploaded successfully', 'cv_status': 'processing'})
+class MyApplicationsViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for candidates to view their own applications.
+    Candidates can only see their own applications.
+    Recruiters cannot access this endpoint.
+    """
+    serializer_class = MyApplicationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    http_method_names = ['get', 'head', 'options']
+    def get_queryset(self):
+        user = self.request.user
+        # Only candidates can access their applications
+        if hasattr(user, 'candidate_profile'):
+            return Candidate.objects.filter(
+                user=user,
+                deleted_at__isnull=True
+            ).select_related('job__posted_by__user').order_by('-applied_at')
+        return Candidate.objects.none()
+    
+    def get_permissions(self):
+        """Only candidates can access this endpoint"""
+        if self.action in ['list', 'retrieve']:
+            return [permissions.IsAuthenticated()]
+        return [permissions.IsAuthenticated()]
+    
