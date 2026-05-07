@@ -13,5 +13,8 @@ urlpatterns = [
     path('logout/', views.LogoutView.as_view(), name='logout'),
     path('password-reset/', views.PasswordResetRequestView.as_view(), name='password-reset-request'),
     path('password-reset/confirm/', views.PasswordResetConfirmView.as_view(), name='password-reset-confirm'),
+    path('verify-email/', views.VerifyEmailView.as_view(), name='verify-email'),
+    path('resend-verification/', views.ResendVerificationView.as_view(), name='resend-verification'),
+    path('profile/', views.UserProfileView.as_view(), name='user-profile'),
     path('', include(router.urls))
 ]
