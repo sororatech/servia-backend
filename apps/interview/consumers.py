@@ -8,12 +8,12 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from apps.ai_reports.models import AIReport
+# from apps.ai_reports.models import AIReport
 from apps.ai_reports.services.gemini_client import (
     analyze_interview,
     generate_follow_up_questions,
 )
-from apps.interview.models import Interview, InterviewConversation
+# from apps.interview.models import Interview, InterviewConversation
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,7 @@ class InterviewConsumer(AsyncWebsocketConsumer):
     MIN_NEW_WORDS_FOR_REFRESH = 8
 
     async def connect(self):
+        from apps.ai_reports.models import AIReport
         raw_interview_id = self.scope["url_route"]["kwargs"]["interview_id"]
         try:
             self.interview_id = str(uuid.UUID(str(raw_interview_id)))
@@ -59,6 +60,7 @@ class InterviewConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive(self, text_data):
+        from apps.interview.models import Interview, InterviewConversation
         try:
             data = json.loads(text_data)
         except Exception:
@@ -291,6 +293,7 @@ class InterviewConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _save_transcript(self, speaker, text, timestamp):
+        from apps.interview.models import Interview, InterviewConversation
         interview = Interview.objects.filter(pk=self.interview_id).first()
         if interview is None:
             logger.warning("Interview %s not found while saving transcript", self.interview_id)
@@ -318,6 +321,7 @@ class InterviewConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _update_interview_status(self, status):
+        from apps.interview.models import Interview
         interview = Interview.objects.filter(pk=self.interview_id).first()
         if interview is None:
             logger.warning("Interview %s not found while updating status", self.interview_id)
@@ -327,6 +331,7 @@ class InterviewConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _get_transcripts(self):
+        from apps.interview.models import InterviewConversation
         rows = (
             InterviewConversation.objects.filter(interview_id=self.interview_id)
             .order_by("timestamp")
@@ -344,6 +349,7 @@ class InterviewConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _get_candidate_context(self, current_text=""):
+        from apps.interview.models import InterviewConversation
         rows = (
             InterviewConversation.objects.filter(
                 interview_id=self.interview_id,
@@ -359,6 +365,8 @@ class InterviewConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def _save_interview_analysis(self, analysis):
+        from apps.interview.models import Interview 
+        from apps.ai_reports.models import AIReport 
         interview = (
             Interview.objects.select_related("candidate")
             .filter(pk=self.interview_id)
