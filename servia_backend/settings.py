@@ -142,9 +142,6 @@ if SENTRY_DSN and not DEBUG:
         environment='production' if not DEBUG else 'development',
         before_send=lambda event, hint: _filter_event(event, hint), 
     )
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.info("Sentry initialized for production monitoring") 
 def _filter_event(event, hint):
     """Strip any remaining PII from Sentry events 
     Removes: email, username, ip_address, phone from user context
