@@ -5,6 +5,8 @@ import os
 import dj_database_url
 from pathlib import Path
 from dotenv import load_dotenv
+import sentry_sdk
+from sentry_sdk.integrations.django import DjangoIntegration
 
 load_dotenv()
 
@@ -129,6 +131,26 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
+SENTRY_DSN = os.getenv('SENTRY_DSN', '')
+
+if SENTRY_DSN and not DEBUG:
+    sentry_sdk.init(
+        dsn=SENTRY_DSN,
+        integrations=[DjangoIntegration()],
+        send_default_pii=False,
+        traces_sample_rate=1.0 if DEBUG else 0.1,
+        environment='production' if not DEBUG else 'development',
+        before_send=lambda event, hint: _filter_event(event, hint), 
+    )
+def _filter_event(event, hint):
+    """Strip any remaining PII from Sentry events 
+    Removes: email, username, ip_address, phone from user context
+    Keeps: anonymized user ID for correlation"""
+    if 'user' in event:
+        event['user'] = {
+            'id': event['user'].get('id'),  
+        }
+    return event
 # Allow all origins only in development (and only if credentials are NOT used)
 CORS_ALLOW_ALL_ORIGINS = os.getenv('CORS_ALLOW_ALL_ORIGINS', 'False') == 'True'
 

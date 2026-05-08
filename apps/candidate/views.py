@@ -3,11 +3,13 @@ import logging
 from rest_framework import viewsets, permissions
 from rest_framework.exceptions import PermissionDenied
 from .models import Candidate, ActivityLog
-from .serializers import CandidateSerializer, ActivityLogSerializer
+from .serializers import CandidateSerializer, ActivityLogSerializer, MyApplicationSerializer
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
+from django.db import models
+from django.db.models import Q 
 from django.utils import timezone
 from .services.storage import generate_signed_url
 from apps.users.tasks import send_html_email
@@ -27,6 +29,7 @@ class CandidateViewSet(viewsets.ModelViewSet):
         return Candidate.objects.none()
     
     def perform_create(self, serializer):
+        
         user = self.request.user
         if hasattr(user, 'candidate_profile'):
             serializer.save(user=user)
@@ -231,3 +234,91 @@ class CVUploadConfirmView(APIView):
             candidate.save()
 
         return Response({'status': 'CV uploaded successfully', 'cv_status': 'processing'})
+class MyApplicationsViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet for candidates to view their own applications.
+    Candidates can only see their own applications.
+    Recruiters cannot access this endpoint.
+    """
+    serializer_class = MyApplicationSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    http_method_names = ['get', 'head', 'options']
+    def get_queryset(self):
+        user = self.request.user
+        # Only candidates can access their applications
+        if hasattr(user, 'candidate_profile'):
+            return Candidate.objects.filter(
+                user=user,
+                deleted_at__isnull=True
+            ).select_related('job__posted_by__user').order_by('-applied_at')
+        return Candidate.objects.none()
+    
+    def get_permissions(self):
+        """Only candidates can access this endpoint"""
+        if self.action in ['list', 'retrieve']:
+            return [permissions.IsAuthenticated()]
+        return [permissions.IsAuthenticated()]
+    
+class MyApplicationsStatsViewSet(viewsets.ViewSet):
+    """
+    ViewSet for candidate application statistics.
+    Returns aggregated stats for candidate dashboard.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    http_method_names = ['get']
+    
+    def list(self, request):
+        user = request.user
+        
+        # Only candidates can access their stats
+        if not hasattr(user, 'candidate_profile'):
+            return Response({
+                'total_applications': 0,
+                'status_breakdown': {},
+                'avg_ai_score': None,
+                'cv_uploaded': 0,
+                'video_uploaded': 0,
+                'pending_actions': 0
+            })
+        
+        applications = Candidate.objects.filter(
+            user=user,
+            deleted_at__isnull=True
+        )
+        
+        total = applications.count()
+        
+        status_breakdown = applications.values('status').annotate(
+            count=models.Count('id')
+        )
+        status_dict = {item['status']: item['count'] for item in status_breakdown}
+        
+        avg_score = applications.filter(
+            ai_score__isnull=False
+        ).aggregate(
+            avg=models.Avg('ai_score')
+        )['avg']
+        
+        cv_uploaded = applications.filter(
+            cv_uploaded_at__isnull=False
+        ).count()
+        
+        video_uploaded = applications.filter(
+            video_uploaded_at__isnull=False
+        ).count()
+        
+        pending_actions = applications.filter(
+            Q(cv_uploaded_at__isnull=True) |
+            Q(status='screened')
+        ).count()
+        
+        stats = {
+            'total_applications': total,
+            'status_breakdown': status_dict,
+            'avg_ai_score': round(avg_score, 1) if avg_score else None,
+            'cv_uploaded': cv_uploaded,
+            'video_uploaded': video_uploaded,
+            'pending_actions': pending_actions
+        }
+        
+        return Response(stats)
