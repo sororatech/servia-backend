@@ -9,6 +9,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.contrib.auth import authenticate
 from django.db import IntegrityError
+from .models import CandidateUser, RecruiterUser
+from .serializers import CandidateUserSerializer, RecruiterUserSerializer, UserProfileSerializer, UserProfileUpdateSerializer, RecruiterProfileUpdateSerializer, CandidateProfileUpdateSerializer
+from apps.users.tasks import send_welcome_email, send_password_reset_email
+from rest_framework.permissions import AllowAny
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
 from django.conf import settings
@@ -452,3 +456,47 @@ class UserProfileView(APIView):
         }
         
         return Response(response_data)
+class UserProfileView(APIView):
+    """
+    API view for users to view and update their own profile.
+    
+    GET: View own profile
+    PATCH: Update own profile (partial update)
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get(self, request):
+        """Get current user's profile"""
+        serializer = UserProfileSerializer(request.user)
+        return Response(serializer.data)
+    
+    def patch(self, request):
+        """Update current user's profile (partial update)"""
+        user = request.user
+        user_serializer = UserProfileUpdateSerializer(user, data=request.data, partial=True)
+        user_serializer.is_valid(raise_exception=True)
+        user_serializer.save()
+        
+        if hasattr(user, 'recruiter_profile'):
+            recruiter = user.recruiter_profile
+            profile_data = request.data.get('profile', {})
+            recruiter_serializer = RecruiterProfileUpdateSerializer(
+                recruiter,
+                data=profile_data,
+                partial=True
+            )
+            recruiter_serializer.is_valid(raise_exception=True)
+            recruiter_serializer.save()
+            
+        elif hasattr(user, 'candidate_profile'):
+            candidate = user.candidate_profile
+            profile_data = request.data.get('profile', {})
+            candidate_serializer = CandidateProfileUpdateSerializer(
+                candidate,
+                data=profile_data,
+                partial=True
+            )
+            candidate_serializer.is_valid(raise_exception=True)
+            candidate_serializer.save()
+        response_serializer = UserProfileSerializer(user)
+        return Response(response_serializer.data)
