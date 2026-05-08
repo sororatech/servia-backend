@@ -21,7 +21,7 @@ from django.utils import timezone
 
 from .models import CandidateUser, RecruiterUser
 from .serializers import CandidateUserSerializer, RecruiterUserSerializer
-from apps.users.tasks import send_welcome_email, send_password_reset_email
+from apps.users.tasks import send_welcome_email, send_password_reset_email, send_verification_email
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -139,6 +139,12 @@ class CandidateRegistrationView(APIView):
                 
                 verification_code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
                 cache.set(f'verify_email_{user.email}', verification_code, timeout=600)
+
+                # Send verification email
+                send_verification_email.delay(user.email, verification_code, user.first_name or user.email)
+                
+                # Log to console for development
+                logger.info(f"Verification code for {user.email}: {verification_code}")
                 
                 send_welcome_email.delay(user.id)
 
@@ -188,6 +194,12 @@ class CandidateRegistrationView(APIView):
 
                                 verification_code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
                                 cache.set(f'verify_email_{user.email}', verification_code, timeout=600)
+
+                                # Send verification email (FIXED: use correct variables)
+                                send_verification_email.delay(user.email, verification_code, user.first_name or user.email)
+
+                                # Log to console for development
+                                logger.info(f"Verification code for {user.email}: {verification_code}")
 
                                 send_welcome_email.delay(user.id)
 
@@ -415,6 +427,12 @@ class ResendVerificationView(APIView):
         
         code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
         cache.set(f'verify_email_{email}', code, timeout=600)
+        
+        # Send verification email
+        send_verification_email.delay(email, code, user.first_name or email)
+        
+        # Log to console for development
+        logger.info(f"Verification code for {email}: {code}")
         
         return Response(
             {'message': 'Verification code sent'},

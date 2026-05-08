@@ -290,3 +290,24 @@ def cleanup_unverified_users():
     except Exception as e:
         logger.error(f"Failed to cleanup unverified users: {str(e)}")
         return 0
+
+@shared_task
+def send_verification_email(user_email, verification_code, user_name=""):
+    """Send verification code email."""
+    try:
+        context = {
+            'user_name': user_name,
+            'verification_code': verification_code,
+        }
+        html_message = render_to_string('email/verification_code.html', context)
+        send_mail(
+            subject="Verify Your ServiaAI Account",
+            message=f'Your verification code is: {verification_code}',
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user_email],
+            html_message=html_message,
+            fail_silently=False,
+        )
+        logger.info(f"Verification email sent to {user_email}")
+    except Exception as e:
+        logger.error(f"Failed to send verification email to {user_email}: {str(e)}")
