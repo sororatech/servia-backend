@@ -16,5 +16,6 @@ urlpatterns = [
     path('verify-email/', views.VerifyEmailView.as_view(), name='verify-email'),
     path('resend-verification/', views.ResendVerificationView.as_view(), name='resend-verification'),
     path('profile/', views.UserProfileView.as_view(), name='user-profile'),
+    path('me/', views.UserProfileView.as_view(), name='user-profile'), 
     path('', include(router.urls))
 ]

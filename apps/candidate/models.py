@@ -13,6 +13,7 @@ class Candidate(models.Model):
         INTERVIEW_SCHEDULED = 'interview_scheduled', 'Interview Scheduled'
         INTERVIEWED = 'interviewed', 'Interviewed'
         OFFERED = 'offered', 'Offered'
+        HIRED = 'hired', 'Hired'
         REJECTED_CV = 'rejected_cv', 'Rejected CV'
         REJECTED_INTERVIEW = 'rejected_interview', 'Rejected Interview'
         HOLD = 'hold', 'Hold'

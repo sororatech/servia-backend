@@ -72,3 +72,68 @@ class RecruiterUserSerializer(serializers.ModelSerializer):
         user = user_serializer.save()
         recruiter = RecruiterUser.objects.create(user=user, **validated_data)
         return recruiter
+class UserProfileSerializer(serializers.ModelSerializer):
+    """
+    Read-only serializer for user profile.
+    Includes user_type and profile-specific fields.
+    """
+    user_type = serializers.SerializerMethodField()
+    profile = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = User
+        fields = ['id', 'email', 'first_name', 'last_name', 'user_type', 'profile', 'date_joined']
+        read_only_fields = ['id', 'email', 'date_joined']
+    
+    def get_user_type(self, obj):
+        if hasattr(obj, 'recruiter_profile'):
+            return 'recruiter'
+        elif hasattr(obj, 'candidate_profile'):
+            return 'candidate'
+        elif obj.is_superuser:
+            return 'admin'
+        return 'unknown'
+    
+    def get_profile(self, obj):
+        if hasattr(obj, 'recruiter_profile'):
+            recruiter = obj.recruiter_profile
+            return {
+                'id': str(recruiter.id),
+                'department': recruiter.department,
+                'role': recruiter.role,
+                'is_active': recruiter.is_active,
+            }
+        elif hasattr(obj, 'candidate_profile'):
+            candidate = obj.candidate_profile
+            return {
+                'id': str(candidate.id),
+                'phone': candidate.phone,
+                'nationality': candidate.nationality,
+                'profile_photo': candidate.profile_photo,
+            }
+        return None
+
+
+class UserProfileUpdateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for updating basic user fields.
+    Email is read-only for security.
+    """
+    class Meta:
+        model = User
+        fields = ['first_name', 'last_name']
+        read_only_fields = ['email', 'username']
+
+
+class RecruiterProfileUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for updating recruiter-specific fields."""
+    class Meta:
+        model = RecruiterUser
+        fields = ['department', 'role']
+
+
+class CandidateProfileUpdateSerializer(serializers.ModelSerializer):
+    """Serializer for updating candidate-specific fields."""
+    class Meta:
+        model = CandidateUser
+        fields = ['phone', 'nationality', 'profile_photo']

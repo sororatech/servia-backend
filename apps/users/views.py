@@ -90,6 +90,7 @@ class CustomAuthToken(APIView):
         response = Response({
             'user_id': user.id,
             'user_type': user_type,
+            'token': token.key, 
             'email': user.email,
             'first_name': user.first_name,
             'last_name': user.last_name,
@@ -140,6 +141,9 @@ class CandidateRegistrationView(APIView):
                 verification_code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
                 cache.set(f'verify_email_{user.email}', verification_code, timeout=600)
                 
+                # Print verification code to console so user can see it during development
+                print(f"\n📧 VERIFICATION CODE for {user.email}: {verification_code}\n")
+                
                 send_welcome_email.delay(user.id)
 
                 response = Response({
@@ -188,6 +192,9 @@ class CandidateRegistrationView(APIView):
 
                                 verification_code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
                                 cache.set(f'verify_email_{user.email}', verification_code, timeout=600)
+
+                                # Print verification code to console during development
+                                print(f"\n📧 VERIFICATION CODE for {user.email}: {verification_code}\n")
 
                                 send_welcome_email.delay(user.id)
 
@@ -416,6 +423,9 @@ class ResendVerificationView(APIView):
         code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
         cache.set(f'verify_email_{email}', code, timeout=600)
         
+        # Print verification code to console during development
+        print(f"\n📧 VERIFICATION CODE for {email}: {code}\n")
+        
         return Response(
             {'message': 'Verification code sent'},
             status=status.HTTP_200_OK
@@ -452,3 +462,4 @@ class UserProfileView(APIView):
         }
         
         return Response(response_data)
+
