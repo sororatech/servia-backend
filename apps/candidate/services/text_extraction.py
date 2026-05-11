@@ -2,11 +2,55 @@
 Text extraction service for CVs with OCR fallback.
 """
 import os
+import platform
 import logging
 import tempfile
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
+
+
+def get_poppler_path():
+    """Get Poppler path from settings, env var, or OS-specific default."""
+    # Try settings first
+    if hasattr(settings, 'POPPLER_BIN'):
+        return settings.POPPLER_BIN
+    
+    # Try environment variable
+    env_path = os.getenv('POPPLER_PATH')
+    if env_path:
+        return env_path
+    
+    # OS-specific defaults
+    system = platform.system()
+    if system == 'Windows':
+        return r'C:\Program Files\poppler\Library\bin'
+    elif system == 'Darwin':  # macOS
+        return '/usr/local/bin'
+    else:  # Linux
+        return '/usr/bin'
+
+
+def get_tesseract_path():
+    """Get Tesseract path from settings, env var, or OS-specific default."""
+    # Try settings first
+    if hasattr(settings, 'TESSERACT_PATH'):
+        return settings.TESSERACT_PATH
+    
+    # Try environment variable
+    env_path = os.getenv('TESSERACT_PATH')
+    if env_path:
+        return env_path
+    
+    # OS-specific defaults
+    system = platform.system()
+    if system == 'Windows':
+        return r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+    elif system == 'Darwin':  # macOS
+        return '/usr/local/bin/tesseract'
+    else:  # Linux
+        return '/usr/bin/tesseract'
+
 
 try:
     from pdfminer.high_level import extract_text as pdfminer_extract
@@ -29,31 +73,44 @@ except ImportError:
     logger.warning("pdf2image not installed")
 
 
+def extract_text_from_pdf(file_path):
+    """Extract text from PDF using pdfminer (for text-based PDFs)."""
+    if not pdfminer_extract:
+        logger.warning("pdfminer not available")
+        return ""
+    
+    try:
+        text = pdfminer_extract(file_path)
+        return text.strip() if text else ""
+    except Exception as e:
+        logger.error(f"PDF text extraction failed: {e}")
+        return ""
+
+
 def extract_text_from_scanned_pdf(file_path):
     """Convert PDF pages to images, then run OCR."""
     if not convert_from_path or not pytesseract:
         logger.error("pdf2image or pytesseract not available for OCR")
         return ""
     
-    POPPLER_BIN = r'C:\Users\adeda\Downloads\Release-26.02.0-0\poppler-26.02.0\Library\bin'
+    poppler_path = get_poppler_path()
+    tesseract_path = get_tesseract_path()
     
-    if not os.path.exists(POPPLER_BIN):
-        logger.error(f"Poppler folder not found at: {POPPLER_BIN}")
-        return ""
+    # Optional validation (can be removed for flexibility)
+    if poppler_path and not os.path.exists(poppler_path):
+        logger.warning(f"Poppler path not found: {poppler_path}, attempting auto-detection")
+        poppler_path = None  # Let pdf2image try to auto-detect
     
-    if not os.path.exists(os.path.join(POPPLER_BIN, 'pdfinfo.exe')):
-        logger.error(f"pdfinfo.exe missing in: {POPPLER_BIN}")
-        return ""
-
     try:
-        if hasattr(settings, 'TESSERACT_PATH'):
-            pytesseract.pytesseract.tesseract_cmd = settings.TESSERACT_PATH
-        else:
-            pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        # Set Tesseract path
+        pytesseract.pytesseract.tesseract_cmd = tesseract_path
+        logger.info(f"Using Tesseract at: {tesseract_path}")
         
-        logger.info(f"Running OCR with Poppler at: {POPPLER_BIN}")
-        images = convert_from_path(file_path, poppler_path=POPPLER_BIN)
+        # Convert PDF to images
+        logger.info(f"Converting PDF to images with Poppler at: {poppler_path or 'auto-detect'}")
+        images = convert_from_path(file_path, poppler_path=poppler_path)
         
+        # Extract text from each page
         all_text = []
         for i, image in enumerate(images):
             text = pytesseract.image_to_string(image)
@@ -72,43 +129,20 @@ def extract_text_from_scanned_pdf(file_path):
 def extract_text_from_image(file_path):
     """Extract text from image using Tesseract OCR."""
     if not pytesseract or not Image:
+        logger.error("pytesseract or PIL not available")
         return ""
+    
+    tesseract_path = get_tesseract_path()
+    
     try:
-        if hasattr(settings, 'TESSERACT_PATH'):
-            pytesseract.pytesseract.tesseract_cmd = settings.TESSERACT_PATH
-        else:
-            pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        pytesseract.pytesseract.tesseract_cmd = tesseract_path
+        logger.info(f"Using Tesseract at: {tesseract_path}")
         
         image = Image.open(file_path)
         text = pytesseract.image_to_string(image)
         return text.strip() if text else ""
     except Exception as e:
         logger.error(f"OCR extraction failed: {e}")
-        return ""
-
-
-def extract_text_from_scanned_pdf(file_path):
-    """Convert PDF pages to images, then run OCR."""
-    if not convert_from_path or not pytesseract:
-        return ""
-    
-    try:
-        if hasattr(settings, 'TESSERACT_PATH'):
-            pytesseract.pytesseract.tesseract_cmd = settings.TESSERACT_PATH
-        else:
-            pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-        
-        images = convert_from_path(file_path)
-        all_text = []
-        
-        for i, image in enumerate(images):
-            text = pytesseract.image_to_string(image)
-            if text.strip():
-                all_text.append(f"--- Page {i+1} ---\n{text}")
-        
-        return "\n\n".join(all_text)
-    except Exception as e:
-        logger.error(f"Scanned PDF OCR failed: {e}")
         return ""
 
 
@@ -127,11 +161,13 @@ def extract_cv_text(file_path, file_extension):
     logger.info(f"Extracting text from {file_extension} file: {file_path}")
     
     if file_extension == 'pdf':
+        # Try direct text extraction first
         text = extract_text_from_pdf(file_path)
         if text and len(text) > 100:
             logger.info(f"PDF text extracted directly: {len(text)} chars")
             return text
         
+        # Fallback to OCR for scanned PDFs
         logger.info("No text found in PDF, trying OCR...")
         text = extract_text_from_scanned_pdf(file_path)
         if text:

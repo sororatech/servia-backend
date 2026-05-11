@@ -1,6 +1,6 @@
 from rest_framework import viewsets, status
 from rest_framework.response import Response
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.db.models import Count, Q
 from django.utils import timezone
@@ -15,15 +15,24 @@ class JobViewSet(viewsets.ModelViewSet):
     """
     def get_queryset(self):
         user = self.request.user
+        now = timezone.now()
         queryset = Job.objects.annotate(
             candidate_count=Count('candidate')
         ).select_related('posted_by__user').order_by('-created_at')
         
-        if not hasattr(user, 'recruiter_profile'):
-            return queryset.filter(is_active=True, deleted_at__isnull=True)
+        # Public filter: active + not soft-deleted + deadline not passed (or no deadline set)
+        public_filter = (
+            Q(is_active=True) & 
+            Q(deleted_at__isnull=True) & 
+            (Q(application_deadline__isnull=True) | Q(application_deadline__gt=now))
+        )
         
+        if not hasattr(user, 'recruiter_profile'):
+            return queryset.filter(public_filter)
+        
+        # Recruiters: see their own jobs + public jobs
         return queryset.filter(
-            Q(posted_by__user__id=user.id) | Q(is_active=True, deleted_at__isnull=True)
+            Q(posted_by__user__id=user.id) | public_filter
         )
     
     def get_serializer_class(self):
@@ -72,6 +81,19 @@ class JobViewSet(viewsets.ModelViewSet):
             response_data['similar_jobs'] = similar_jobs
         
         return Response(response_data, status=status.HTTP_201_CREATED, headers=headers)
+
+    @action(detail=False, methods=['get'], url_path='department-categories')
+    def department_categories(self, request):
+        """Returns departments grouped by category for frontend dropdowns."""
+        categories = Job.Department.get_department_categories()
+        formatted = {
+            category: [
+                {'value': dept.value, 'label': dept.label}
+                for dept in depts
+            ]
+            for category, depts in categories.items()
+        }
+        return Response(formatted)
     
     def perform_destroy(self, instance):
         """Soft delete instead of hard delete"""
@@ -94,4 +116,18 @@ def department_categories(request):
         for category, depts in categories.items()
     }
     
+    return Response(formatted)
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def department_categories(request):
+    """Return departments grouped by category for frontend dropdowns."""
+    categories = Job.Department.get_department_categories()
+    formatted = {
+        category: [
+            {'value': dept.value, 'label': dept.label}
+            for dept in depts
+        ]
+        for category, depts in categories.items()
+    }
     return Response(formatted)

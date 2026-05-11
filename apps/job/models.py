@@ -183,6 +183,14 @@ class Job(models.Model):
     is_active = models.BooleanField(default=True, db_index=True)
     posted_by = models.ForeignKey(RecruiterUser, on_delete=models.SET_NULL, null=True, blank=True, db_index=True)
     deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    application_deadline = models.DateTimeField(
+        null=True, 
+        blank=True, 
+        db_index=True,
+        help_text="Last date candidates can apply. Leave blank for open-ended roles."
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
