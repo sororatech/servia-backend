@@ -28,7 +28,8 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str)
 
         candidate = Candidate.objects.filter(id=candidate_id).first()
         if not candidate:
-            raise ObjectDoesNotExist(f"Candidate {candidate_id} does not exist.")
+            logger.error(f"Candidate {candidate_id} not found for CV analysis")
+            return {'candidate_id': candidate_id, 'status': 'failed', 'reason': 'candidate_not_found'}
 
         if AIReport.objects.filter(
             candidate=candidate,
@@ -72,6 +73,7 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str)
                 weaknesses=vd['weaknesses'],
                 feedback=vd['feedback'],
                 extracted_skills=vd.get('extracted_skills') or [],
+                skills_match_details=vd.get('skills_match_details'),
             )
 
             fit_score = serializer.validated_data['fit_score']

@@ -29,7 +29,12 @@ Return a JSON object with:
     "strengths": [str],
     "weaknesses": [str],
     "feedback": str (personalized message to candidate),
-    "extracted_skills": [str] (list of specific skills, tools, technologies, and competencies found in the CV)
+    "extracted_skills": [str] (list of specific skills, tools, technologies, and competencies found in the CV),
+    "skills_match_details": {{
+        "matched_skills": [str],
+        "missing_skills": [str],
+        "match_explanation": str (1-2 sentences explaining the match)
+    }}
 }}
 
 Derive your evaluation criteria entirely from the JOB REQUIREMENTS above.
@@ -41,6 +46,11 @@ score very low even if they have transferable soft skills.
 For extracted_skills, list every concrete skill mentioned in the CV
 (e.g. "Python", "Project Management", "Adobe Photoshop", "Guest Relations").
 Return up to 20 skills.
+
+For skills_match_details:
+- matched_skills: List skills from the CV that satisfy job requirements (include synonyms, e.g., "web development" matches "HTML/CSS")
+- missing_skills: List key job requirements NOT found in the CV
+- match_explanation: Briefly explain how the candidate's skills align with the job (e.g., "Candidate's web development experience covers the required HTML/CSS skills")
 
 Return ONLY the JSON object — no extra text, no markdown,
 no code blocks.
@@ -58,22 +68,22 @@ class GeminiResponseError(Exception):
 
 CV_SCREENING_RESPONSE_SCHEMA = {
     "type": "object",
-    "required": ["fit_score", "summary", "strengths", "weaknesses", "feedback", "extracted_skills"],
+    "required": ["fit_score", "summary", "strengths", "weaknesses", "feedback", "extracted_skills", "skills_match_details"],
     "properties": {
         "fit_score": {"type": "integer"},
         "summary": {"type": "string"},
-        "strengths": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-        "weaknesses": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
+        "strengths": {"type": "array", "items": {"type": "string"}},
+        "weaknesses": {"type": "array", "items": {"type": "string"}},
         "feedback": {"type": "string"},
-        "extracted_skills": {
-            "type": "array",
-            "items": {"type": "string"},
+        "extracted_skills": {"type": "array", "items": {"type": "string"}},
+        "skills_match_details": {
+            "type": "object",
+            "required": ["matched_skills", "missing_skills", "match_explanation"],
+            "properties": {
+                "matched_skills": {"type": "array", "items": {"type": "string"}},
+                "missing_skills": {"type": "array", "items": {"type": "string"}},
+                "match_explanation": {"type": "string"},
+            },
         },
     },
 }
@@ -135,7 +145,7 @@ def _call_model(model, prompt: str) -> dict:
 
     result = extract_json_object(response.text.strip())
 
-    required_fields = ['fit_score', 'summary', 'strengths', 'weaknesses', 'feedback', 'extracted_skills']
+    required_fields = ['fit_score', 'summary', 'strengths', 'weaknesses', 'feedback', 'extracted_skills', 'skills_match_details']
     for field in required_fields:
         if field not in result:
             raise GeminiResponseError(f"Missing required field: {field}")

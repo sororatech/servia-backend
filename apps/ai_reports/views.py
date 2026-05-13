@@ -23,7 +23,7 @@ class AIReportViewSet(viewsets.ModelViewSet):
         if hasattr(user, 'recruiter_profile'):
             return AIReport.objects.all()
         elif hasattr(user, 'candidate_profile'):
-            return AIReport.objects.filter(candidate__user=user)
+            return AIReport.objects.filter(candidate__user=user).select_related('candidate__user')
         return AIReport.objects.none()
 
 

@@ -6,6 +6,20 @@ from django.conf import settings
 from botocore.config import Config
 from apps.job.serializers import JobSerializer
 
+VALID_TRANSITIONS = {
+    Candidate.Status.APPLIED: [Candidate.Status.SCREENED, Candidate.Status.REJECTED_CV],
+    Candidate.Status.SCREENED: [Candidate.Status.SHORTLISTED, Candidate.Status.REJECTED_CV, Candidate.Status.HOLD],
+    Candidate.Status.SHORTLISTED: [Candidate.Status.VIDEO_SUBMITTED, Candidate.Status.INTERVIEW_SCHEDULED, Candidate.Status.REJECTED_CV],
+    Candidate.Status.VIDEO_SUBMITTED: [Candidate.Status.INTERVIEW_SCHEDULED, Candidate.Status.REJECTED_CV],
+    Candidate.Status.INTERVIEW_SCHEDULED: [Candidate.Status.INTERVIEWED, Candidate.Status.REJECTED_INTERVIEW],
+    Candidate.Status.INTERVIEWED: [Candidate.Status.OFFERED, Candidate.Status.REJECTED_INTERVIEW],
+    Candidate.Status.OFFERED: [Candidate.Status.HIRED, Candidate.Status.REJECTED_INTERVIEW],
+    # Terminal states
+    Candidate.Status.HIRED: [],
+    Candidate.Status.REJECTED_CV: [],
+    Candidate.Status.REJECTED_INTERVIEW: [],
+    Candidate.Status.HOLD: [Candidate.Status.SHORTLISTED, Candidate.Status.REJECTED_CV],
+}
 class UserBasicSerializer(serializers.ModelSerializer):
     """
     Simplified user serializer for nested display.
@@ -27,7 +41,8 @@ class CandidateSerializer(serializers.ModelSerializer):
         model = Candidate
         fields = '__all__'
         read_only_fields = ['id', 'applied_at', 'updated_at', 'user']
-    
+    import logging
+    logger = logging.getLogger(__name__)
     def get_cv_download_url(self, obj):
         """Generate signed R2 URL for CV download (1-hour expiry)"""
         if not obj.cv_file:
@@ -59,9 +74,28 @@ class CandidateSerializer(serializers.ModelSerializer):
             return url
         except Exception as e:
             # Log error but don't break the response
-            print(f"Error generating CV download URL: {e}")
+            logger.error(f"Failed to generate CV download URL for candidate {obj.id}: {e}", exc_info=True)
             return None
-    
+    def validate(self, data):
+        """Prevent duplicate applications (same user + job)"""
+        user = self.context['request'].user
+        job = data.get('job')
+        
+        if user and job:
+            if Candidate.objects.filter(user=user, job=job, deleted_at__isnull=True).exists():
+                raise serializers.ValidationError({
+                    'job': 'You have already applied to this job.'
+                })
+        instance = self.instance
+        if instance and 'status' in data:
+            old_status = instance.status
+            new_status = data['status']
+            if new_status not in VALID_TRANSITIONS.get(old_status, []):
+                raise serializers.ValidationError({
+                    'status': f"Cannot transition from '{old_status}' to '{new_status}'. Allowed: {VALID_TRANSITIONS.get(old_status, [])}"
+                })
+        return data
+
     def get_video_download_url(self, obj):
         """Generate signed URL for video download"""
         if not obj.video_intro_url:
@@ -90,16 +124,20 @@ class MyApplicationSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'applied_at']
     
     def get_ai_report(self, obj):
-        """Get latest AI report for this application"""
+        """Get latest AI report for this application with skills match"""
         from apps.ai_reports.models import AIReport
         report = AIReport.objects.filter(
             candidate=obj,
             report_type=AIReport.ReportType.CV_SCREENING
-        ).order_by('-created_at').first()
+        ).select_related('candidate__job').order_by('-created_at').first()
         
         if report:
             return {
                 'fit_score': report.fit_score,
+                'skills_match_score': report.skills_match_details.get('match_score') if report.skills_match_details else None,
+                'matched_skills': report.skills_match_details.get('matched_skills', []) if report.skills_match_details else [],
+                'missing_skills': report.skills_match_details.get('missing_skills', []) if report.skills_match_details else [],
+                'match_explanation': report.skills_match_details.get('match_explanation', '') if report.skills_match_details else '',
                 'summary': report.summary,
                 'recommendation': report.recommendation,
                 'created_at': report.created_at.isoformat()

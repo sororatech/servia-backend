@@ -3,7 +3,7 @@ import logging
 from rest_framework import viewsets, permissions
 from rest_framework.exceptions import PermissionDenied
 from .models import Candidate, ActivityLog
-from .serializers import CandidateSerializer, ActivityLogSerializer, MyApplicationSerializer
+from .serializers import CandidateSerializer, ActivityLogSerializer, MyApplicationSerializer, VALID_TRANSITIONS
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
@@ -11,25 +11,83 @@ from rest_framework import status
 from django.db import models
 from django.db.models import Q 
 from django.utils import timezone
+from django.conf import settings
+from apps.job.models import Job 
 from .services.storage import generate_signed_url
 from apps.users.tasks import send_html_email
-logger = logging.getLogger(__name__)
+from rest_framework.decorators import api_view, permission_classes
 
+logger = logging.getLogger(__name__)
+def _check_upload_permission(candidate, user):
+    """
+    Validate that user has permission to upload CV for this candidate.
+    Returns (is_allowed: bool, error_message: str|None)
+    """
+    if hasattr(user, 'candidate_profile'):
+        if candidate.user != user:
+            return False, 'You can only modify your own applications.'
+        return True, None
+    
+    elif hasattr(user, 'recruiter_profile'):
+        if candidate.job.posted_by != user.recruiter_profile:
+            return False, 'You do not have permission for this application.'
+        return True, None
+    
+    elif user.is_superuser:
+        return True, None
+    
+    return False, 'Unauthorized.'
 class CandidateViewSet(viewsets.ModelViewSet):
     serializer_class = CandidateSerializer
     permission_classes = [permissions.IsAuthenticated]
-    queryset = Candidate.objects.none()          # required for router
+    queryset = Candidate.objects.none()
 
     def get_queryset(self):
         user = self.request.user
         if hasattr(user, 'recruiter_profile'):
-            return Candidate.objects.all()
+            return Candidate.objects.filter(
+                job__posted_by=user.recruiter_profile,
+                deleted_at__isnull=True
+            ).select_related('user', 'job__posted_by__user')
         elif hasattr(user, 'candidate_profile'):
-            return Candidate.objects.filter(user=user)
+            return Candidate.objects.filter(user=user, deleted_at__isnull=True)
         return Candidate.objects.none()
-    
+
+    def create(self, request, *args, **kwargs):
+        user = request.user
+        job_id = request.data.get('job')
+
+        # Only check duplicates for authenticated candidates
+        if hasattr(user, 'candidate_profile') and job_id:
+            try:
+                job = Job.objects.get(id=job_id)
+            except Job.DoesNotExist:
+                return Response({'job': ['Job not found.']}, status=status.HTTP_400_BAD_REQUEST)
+
+            now = timezone.now()
+            if not job.is_active:
+                return Response({'job': ['This job is no longer accepting applications.']}, status=status.HTTP_400_BAD_REQUEST)
+            if job.deleted_at:
+                return Response({'job': ['This job has been removed.']}, status=status.HTTP_400_BAD_REQUEST)
+            if job.application_deadline and job.application_deadline < now:
+                return Response({'job': ['Application deadline has passed.']}, status=status.HTTP_400_BAD_REQUEST)
+
+            existing = Candidate.objects.filter(user=user, job=job, deleted_at__isnull=True).first()
+
+            if existing:
+                # Gracefully return existing application instead of creating duplicate
+                serializer = self.get_serializer(existing)
+                return Response({
+                    'id': serializer.data['id'],
+                    'already_exists': True,
+                    'message': 'You have already applied to this job.',
+                    'status': existing.status
+                }, status=status.HTTP_200_OK)
+
+        # Proceed with normal creation if no duplicate found
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
-        
         user = self.request.user
         if hasattr(user, 'candidate_profile'):
             serializer.save(user=user)
@@ -129,9 +187,14 @@ class CVUploadURLView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, candidate_id):
-        candidate = Candidate.objects.get(id=candidate_id)
-        if candidate.user != request.user and not hasattr(request.user, 'recruiter_profile'):
-            return Response({'error': 'Not authorized'}, status=403)
+        try:
+            candidate = Candidate.objects.select_related('user', 'job__posted_by').get(id=candidate_id)
+        except Candidate.DoesNotExist:
+            return Response({'error': 'Application not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        is_allowed, error_msg = _check_upload_permission(candidate, request.user)
+        if not is_allowed:
+            return Response({'error': error_msg}, status=status.HTTP_403_FORBIDDEN)
         
         file_extension = request.data.get('file_extension', 'pdf').lower()
         
@@ -149,20 +212,24 @@ class CVUploadURLView(APIView):
         content_type = content_type_map.get(file_extension, 'application/octet-stream')
 
         file_key = f'cv/{candidate_id}/{uuid.uuid4()}.{file_extension}'
-        
+        file_size = request.data.get('file_size', 0)
+        max_size = getattr(settings, 'MAX_CV_SIZE_MB', 10) * 1024 * 1024  # 10MB default
+    
+        if file_size and file_size > max_size:
+            return Response({
+                'error': f'File size exceeds {max_size // (1024*1024)}MB limit.'
+            }, status=status.HTTP_400_BAD_REQUEST)      
         signed_url = generate_signed_url(
             file_key, 
             method='put_object', 
             expires_in=900,  # 15 minutes
             content_type=content_type 
         )
-        
         return Response({
             'upload_url': signed_url, 
             'file_key': file_key,
-            'content_type': content_type,  # Return this for frontend to use
+            'content_type': content_type,
         })
-
 class CVUploadConfirmView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -171,7 +238,15 @@ class CVUploadConfirmView(APIView):
         import requests
         import os
         
-        candidate = Candidate.objects.get(id=candidate_id)
+        try:
+            candidate = Candidate.objects.select_related('user', 'job__posted_by').get(id=candidate_id)
+        except Candidate.DoesNotExist:
+            return Response({'error': 'Application not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        is_allowed, error_msg = _check_upload_permission(candidate, request.user)
+        if not is_allowed:
+            return Response({'error': error_msg}, status=status.HTTP_403_FORBIDDEN)
+        
         file_key = request.data.get('file_key')
         filename = request.data.get('filename', '')  
         if not file_key:
@@ -211,29 +286,46 @@ class CVUploadConfirmView(APIView):
 
             os.unlink(tmp_path)
 
-            job = candidate.job
-            job_description = (
-                f"Job Title: {job.title}\n\n"
-                f"Description:\n{job.description}\n\n"
-                f"Requirements:\n{job.requirements}"
-            )
+            # Only trigger if not already processing/analyzed
+            if candidate.cv_status not in [Candidate.CVStatus.PROCESSING, Candidate.CVStatus.ANALYZED]:
+                candidate.cv_status = Candidate.CVStatus.PROCESSING
+                candidate.save(update_fields=['cv_status'])
+                
+                job = candidate.job
+                job_description = (
+                    f"Job Title: {job.title}\n\n"
+                    f"Description:\n{job.description}\n\n"
+                    f"Requirements:\n{job.requirements}"
+                )
 
-            from apps.ai_reports.tasks import analyze_cv_task
-            analyze_cv_task.delay(str(candidate.id), extracted_text, job_description)
+                from apps.ai_reports.tasks import analyze_cv_task
+                analyze_cv_task.delay(str(candidate.id), extracted_text, job_description)
 
-            ActivityLog.objects.create(
-                candidate=candidate,
-                event_type=ActivityLog.EventType.CV_UPLOADED,
-                note="CV uploaded and queued for AI analysis",
-                created_by_type=ActivityLog.CreatedByType.CANDIDATE,
-                created_by_id=request.user.id,
-            )
+                # Use proper UUID handling for ActivityLog
+                user_uuid = str(request.user.pk) if isinstance(request.user.pk, uuid.UUID) else None
+                
+                ActivityLog.objects.create(
+                    candidate=candidate,
+                    event_type=ActivityLog.EventType.AI_ANALYSIS_COMPLETE, 
+                    note="CV text extracted and AI analysis queued",
+                    created_by_type=ActivityLog.CreatedByType.CANDIDATE,
+                    created_by_id=user_uuid,
+                    visibility=ActivityLog.Visibility.BOTH,
+                )
+            else:
+                logger.info(f"CV analysis already in progress/complete for candidate {candidate.id}, skipping duplicate trigger")
 
         except Exception as e:
             candidate.cv_status = 'error'
             candidate.save()
+            logger.error(f"CV upload confirm failed for candidate {candidate_id}: {e}", exc_info=True)
+            return Response(
+                {'error': 'Failed to process CV. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
         return Response({'status': 'CV uploaded successfully', 'cv_status': 'processing'})
+
 class MyApplicationsViewSet(viewsets.ModelViewSet):
     """
     ViewSet for candidates to view their own applications.
@@ -322,3 +414,69 @@ class MyApplicationsStatsViewSet(viewsets.ViewSet):
         }
         
         return Response(stats)
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def bulk_update_status(request):
+    """
+    Bulk update status for multiple candidates.
+    Only recruiters can use this endpoint.
+    """
+    if not hasattr(request.user, 'recruiter_profile'):
+        return Response({'error': 'Only recruiters can bulk update statuses.'}, status=403)
+    
+    candidate_ids = request.data.get('candidate_ids', [])
+    new_status = request.data.get('status')
+    
+    if not candidate_ids or not new_status:
+        return Response({'error': 'candidate_ids and status are required.'}, status=400)
+    
+    # Validate status is a valid choice
+    if new_status not in Candidate.Status.values:
+        return Response({'error': f'Invalid status. Choices: {Candidate.Status.values}'}, status=400)
+    
+    # Scope to recruiter's candidates only
+    candidates = Candidate.objects.filter(
+        id__in=candidate_ids,
+        job__posted_by=request.user.recruiter_profile,
+        deleted_at__isnull=True
+    ).select_related('job__posted_by')
+    
+    updated_count = 0
+    errors = []
+    
+    for candidate in candidates:
+        old_status = candidate.status
+        if new_status not in VALID_TRANSITIONS.get(old_status, []):
+            errors.append({
+                'candidate_id': str(candidate.id),
+                'error': f"Cannot transition from '{old_status}' to '{new_status}'"
+            })
+            continue
+        
+        candidate.status = new_status
+        candidate.save(update_fields=['status', 'updated_at'])
+        
+        # Send email notification
+        from apps.candidate.services.email_notifications import send_status_email
+        send_status_email(candidate, new_status, old_status)
+        user_uuid = getattr(request.user, 'pk', None)
+        if user_uuid and isinstance(user_uuid, uuid.UUID):
+            created_by_uuid = str(user_uuid)
+        else:
+            created_by_uuid = None  
+
+        ActivityLog.objects.create(
+            candidate=candidate,
+            event_type=ActivityLog.EventType.SHORTLISTED if new_status == Candidate.Status.SHORTLISTED else ActivityLog.EventType.HOLD,
+            note=f"Status changed from {old_status} to {new_status} via bulk update",
+            created_by_type=ActivityLog.CreatedByType.RECRUITER,
+            created_by_id=created_by_uuid, 
+            visibility=ActivityLog.Visibility.BOTH,
+        )
+        updated_count += 1
+    
+    return Response({
+        'updated_count': updated_count,
+        'errors': errors,
+        'message': f'Successfully updated {updated_count} candidates.'
+    })
