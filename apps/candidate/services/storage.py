@@ -2,6 +2,19 @@ import boto3
 from botocore.config import Config
 from django.conf import settings
 
+def get_storage_client():
+    return boto3.client(
+        's3',
+        endpoint_url=settings.CLOUDFLARE_R2_ENDPOINT,
+        aws_access_key_id=settings.CLOUDFLARE_R2_ACCESS_KEY,
+        aws_secret_access_key=settings.CLOUDFLARE_R2_SECRET_KEY,
+        region_name='auto',
+        config=Config(
+            signature_version='s3v4',
+        ),
+    )
+
+
 def generate_signed_url(file_key, method='put_object', expires_in=900, content_type=None, response_content_disposition=None):
     """
     Generate a presigned URL for Cloudflare R2.
@@ -15,16 +28,7 @@ def generate_signed_url(file_key, method='put_object', expires_in=900, content_t
     Returns:
         str: Presigned URL
     """
-    s3 = boto3.client(
-        's3',
-        endpoint_url=settings.CLOUDFLARE_R2_ENDPOINT,
-        aws_access_key_id=settings.CLOUDFLARE_R2_ACCESS_KEY,
-        aws_secret_access_key=settings.CLOUDFLARE_R2_SECRET_KEY,
-        region_name='auto',
-        config=Config(
-            signature_version='s3v4',
-        ),
-    )
+    s3 = get_storage_client()
     
     params = {
         'Bucket': settings.CLOUDFLARE_R2_BUCKET,
@@ -44,3 +48,27 @@ def generate_signed_url(file_key, method='put_object', expires_in=900, content_t
     )
     
     return url
+
+
+def upload_fileobj(file_obj, file_key, content_type=None):
+    """Upload a file-like object to Cloudflare R2."""
+    s3 = get_storage_client()
+    extra_args = {}
+    if content_type:
+        extra_args['ContentType'] = content_type
+
+    upload_kwargs = {
+        'Fileobj': file_obj,
+        'Bucket': settings.CLOUDFLARE_R2_BUCKET,
+        'Key': file_key,
+    }
+    if extra_args:
+        upload_kwargs['ExtraArgs'] = extra_args
+
+    s3.upload_fileobj(**upload_kwargs)
+
+
+def delete_file(file_key):
+    """Delete a file from Cloudflare R2."""
+    s3 = get_storage_client()
+    s3.delete_object(Bucket=settings.CLOUDFLARE_R2_BUCKET, Key=file_key)

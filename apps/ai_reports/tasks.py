@@ -18,6 +18,16 @@ from apps.ai_reports.services.gemini_client import (
 )
 
 
+def _can_update_task_state(task) -> bool:
+    task_id = getattr(getattr(task, 'request', None), 'id', None)
+    return bool(task_id)
+
+
+def _safe_update_state(task, state: str, meta: dict):
+    if _can_update_task_state(task):
+        task.update_state(state=state, meta=meta)
+
+
 @shared_task(bind=True, max_retries=3)
 def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str, core_skills: list, education_level: str = None) -> dict:
     """
@@ -38,7 +48,8 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str,
             logger.info(f"AIReport already exists for candidate {candidate_id} — skipping duplicate analysis.")
             return {'candidate_id': candidate_id, 'status': 'skipped', 'reason': 'report_already_exists'}
 
-        self.update_state(
+        _safe_update_state(
+            self,
             state='PROGRESS',
             meta={'candidate_id': candidate_id, 'status': 'Analyzing CV...'}
         )
@@ -50,7 +61,8 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str,
             education_level=education_level
         )
 
-        self.update_state(
+        _safe_update_state(
+            self,
             state='PROGRESS',
             meta={'candidate_id': candidate_id, 'status': 'Validating AI response...'}
         )
@@ -58,7 +70,8 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str,
         serializer = AIReportSerializer(data=result)
         serializer.is_valid(raise_exception=True)
 
-        self.update_state(
+        _safe_update_state(
+            self,
             state='PROGRESS',
             meta={'candidate_id': candidate_id, 'status': 'Saving AI report...'}
         )
@@ -132,7 +145,8 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str,
                     'candidate_id': candidate_id,
                 },
             )
-        self.update_state(
+        _safe_update_state(
+            self,
             state='FAILURE',
             meta={'candidate_id': candidate_id, 'status': 'failed', 'error': str(e)}
         )
@@ -146,4 +160,11 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str,
             if candidate:
                 candidate.cv_status = Candidate.CVStatus.ERROR
                 candidate.save(update_fields=['cv_status'])
-        raise self.retry(exc=e, countdown=60)
+        if _can_update_task_state(self):
+            raise self.retry(exc=e, countdown=60)
+
+        candidate = Candidate.objects.filter(id=candidate_id).first()
+        if candidate:
+            candidate.cv_status = Candidate.CVStatus.ERROR
+            candidate.save(update_fields=['cv_status'])
+        raise

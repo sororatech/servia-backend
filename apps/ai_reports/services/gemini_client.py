@@ -113,6 +113,44 @@ CV_SCREENING_RESPONSE_SCHEMA = {
 
 def extract_json_object(response_text: str) -> dict:
     """Extract the first JSON object from a Gemini text response."""
+    def _sanitize_jsonish_text(text: str) -> str:
+        result = []
+        in_string = False
+        escaped = False
+
+        for char in text:
+            if escaped:
+                result.append(char)
+                escaped = False
+                continue
+
+            if char == '\\':
+                result.append(char)
+                escaped = True
+                continue
+
+            if char == '"':
+                result.append(char)
+                in_string = not in_string
+                continue
+
+            if in_string:
+                if char == '\n':
+                    result.append('\\n')
+                    continue
+                if char == '\r':
+                    result.append('\\r')
+                    continue
+                if char == '\t':
+                    result.append('\\t')
+                    continue
+
+            result.append(char)
+
+        sanitized = ''.join(result)
+        sanitized = re.sub(r',(\s*[}\]])', r'\1', sanitized)
+        return sanitized
+
     cleaned_text = response_text.strip()
 
     if cleaned_text.startswith('```'):
@@ -130,7 +168,13 @@ def extract_json_object(response_text: str) -> dict:
         end_index = cleaned_text.rfind('}')
         if start_index == -1 or end_index == -1 or end_index <= start_index:
             raise
-        return json.loads(cleaned_text[start_index:end_index + 1])
+
+        candidate_text = cleaned_text[start_index:end_index + 1]
+        try:
+            return json.loads(candidate_text)
+        except json.JSONDecodeError:
+            repaired_text = _sanitize_jsonish_text(candidate_text)
+            return json.loads(repaired_text)
 
 
 PRIMARY_MODEL = 'gemini-2.5-flash'
@@ -158,11 +202,11 @@ def _call_model(model, prompt: str) -> dict:
         prompt,
         generation_config=genai.types.GenerationConfig(
             temperature=0,
-            max_output_tokens=8192,
+            max_output_tokens=1536,
             response_mime_type="application/json",
             response_schema=CV_SCREENING_RESPONSE_SCHEMA,
         ),
-        request_options={'timeout': 30}
+        request_options={'timeout': 60}
     )
 
     result = extract_json_object(response.text.strip())

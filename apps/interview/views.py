@@ -3,6 +3,7 @@ Interview and conversation views.
 Candidates can only view their own interviews; recruiters can view all and manage.
 """
 import os
+from uuid import uuid4
 from django.db.models import Case, IntegerField, Value, When
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -13,6 +14,7 @@ from rest_framework.views import APIView
 
 from apps.users.permissions import IsRecruiter
 from apps.users.tasks import send_interview_invite_email
+from apps.candidate.models import Candidate
 
 from .models import Interview, InterviewConversation
 from .serializers import InterviewSerializer, InterviewConversationSerializer
@@ -36,7 +38,14 @@ class InterviewViewSet(viewsets.ModelViewSet):
             return Interview.objects.filter(candidate__user=user)
         return Interview.objects.none()
     def perform_create(self, serializer):
-        interview = serializer.save()
+        recruiter = getattr(self.request.user, 'recruiter_profile', None)
+        interview = serializer.save(
+            recruiter=recruiter,
+            meet_link=f"https://meet.servia.local/interviews/{uuid4()}",
+        )
+        Candidate.objects.filter(id=interview.candidate_id).update(
+            status=Candidate.Status.INTERVIEW_SCHEDULED,
+        )
         base_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
         confirm_url = f"{base_url}/interview/confirm/{interview.confirmation_token}"
         decline_url = f"{base_url}/interview/decline/{interview.confirmation_token}"
