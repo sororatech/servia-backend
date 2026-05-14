@@ -19,7 +19,7 @@ from apps.ai_reports.services.gemini_client import (
 
 
 @shared_task(bind=True, max_retries=3)
-def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str, core_skills: list):
+def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str, core_skills: list, education_level: str = None) -> dict:
     """
     Background Celery task to analyze a candidate CV using Gemini Flash.
     """
@@ -47,6 +47,7 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str,
             cv_text=cv_text,
             job_description=job_description,
             core_skills= core_skills,
+            education_level=education_level
         )
 
         self.update_state(
@@ -75,6 +76,7 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str,
                 feedback=vd['feedback'],
                 extracted_skills=vd.get('extracted_skills') or [],
                 skills_match_details=vd.get('skills_match_details'),
+                education_match=vd.get('education_match'),
             )
 
             fit_score = serializer.validated_data['fit_score']

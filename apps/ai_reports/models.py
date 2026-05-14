@@ -33,6 +33,7 @@ class AIReport(models.Model):
     feedback = models.TextField()
     extracted_skills = models.JSONField(default=list)
     skills_match_details = models.JSONField(blank=True, null=True)
+    education_match = models.JSONField(blank=True, null=True)
     recommendation = models.CharField(max_length=20, choices=Recommendation.choices, blank=True, null=True)
     confidence = models.CharField(max_length=10, choices=Confidence.choices, blank=True, null=True)
     raw_response = models.JSONField(blank=True, null=True)

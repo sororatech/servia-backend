@@ -26,7 +26,8 @@ class AIReportSerializer(serializers.Serializer):
     feedback = serializers.CharField()
     extracted_skills = serializers.ListField(child=serializers.CharField(), default=list)
     skills_match_details = SkillsMatchDetailsSerializer(required=False, allow_null=True)
-
+    education_match = serializers.JSONField(required=False, allow_null=True) 
+    
     def validate_fit_score(self, value):
         if not 0 <= value <= 100:
             raise serializers.ValidationError("fit_score must be between 0 and 100")

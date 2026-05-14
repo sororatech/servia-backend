@@ -221,13 +221,14 @@ class CVUploadURLView(APIView):
 
         file_extension = request.data.get('file_extension', 'pdf').lower()
         
-        allowed_formats = ['pdf', 'docx', 'png', 'jpg', 'jpeg']
+        allowed_formats = ['pdf', 'docx', 'doc', 'png', 'jpg', 'jpeg']
         if file_extension not in allowed_formats:
-            return Response({'error': 'Only PDF, DOCX, PNG, and JPG files are supported.'}, status=400)
+            return Response({'error': 'Only PDF, DOCX, DOC, PNG, and JPG files are supported.'}, status=400)
 
         content_type_map = {
             'pdf': 'application/pdf',
             'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'doc': 'application/msword',
             'png': 'image/png',
             'jpg': 'image/jpeg',
             'jpeg': 'image/jpeg',
@@ -310,6 +311,7 @@ class CVUploadConfirmView(APIView):
             ALLOWED_MIMES = {
                 'application/pdf': 'pdf',
                 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+                'application/msword': 'doc', 
                 'image/png': 'png',
                 'image/jpeg': 'jpg',
             }
@@ -348,14 +350,16 @@ class CVUploadConfirmView(APIView):
             job = candidate.job
             core_skills_list = job.core_skills if job.core_skills else []
             core_skills_str = ", ".join(core_skills_list) if core_skills_list else "None specified"
+            education_level_display = job.get_education_level_display()
             job_description = (
                 f"Job Title: {job.title}\n\n"
                 f"Description:\n{job.description or ''}\n\n"
                 f"Requirements:\n{job.requirements or ''}\n\n"
+                f"Minimum Education Level Required:\n{education_level_display}\n\n"
                 f"Core Skills Required:\n{core_skills_str}"
             )
             from apps.ai_reports.tasks import analyze_cv_task
-            analyze_cv_task.delay(str(candidate.id), extracted_text, job_description, core_skills_list)
+            analyze_cv_task.delay(str(candidate.id), extracted_text, job_description, core_skills_list, education_level_display)
 
             # 7. Mark as processing
             candidate.cv_status = Candidate.CVStatus.PROCESSING

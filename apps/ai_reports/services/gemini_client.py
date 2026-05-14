@@ -22,6 +22,9 @@ JOB REQUIREMENTS:
 CORE SKILLS (explicit list to check):
 {core_skills}
 
+MINIMUM EDUCATION LEVEL REQUIRED:
+{education_level}
+
 CANDIDATE CV TEXT:
 {cv_text}
 
@@ -37,6 +40,11 @@ Return a JSON object with:
         "matched_skills": [str],
         "missing_skills": [str],
         "match_explanation": str (1-2 sentences explaining the match)
+    }},
+    "education_match": {{
+        "candidate_education": str (the education level stated in the CV),
+        "meets_requirement": bool,
+        "explanation": str (1-2 sentences explaining how the candidate's education does or does not meet the requirement)
     }}
 }}
 
@@ -87,6 +95,15 @@ CV_SCREENING_RESPONSE_SCHEMA = {
                 "matched_skills": {"type": "array", "items": {"type": "string"}},
                 "missing_skills": {"type": "array", "items": {"type": "string"}},
                 "match_explanation": {"type": "string"},
+            },
+        },
+        "education_match": {
+            "type": "object",
+            "required": ["candidate_education", "meets_requirement", "explanation"],
+            "properties": {
+                "candidate_education": {"type": "string"},
+                "meets_requirement": {"type": "boolean"},
+                "explanation": {"type": "string"},
             },
         },
     },
@@ -373,7 +390,7 @@ def analyze_interview(transcripts: list) -> dict:
     return {}
 
 
-def analyze_cv(cv_text: str, job_description: str, core_skills: list = None, max_retries: int = 3) -> dict:
+def analyze_cv(cv_text: str, job_description: str, core_skills: list = None, education_level: str = None, max_retries: int = 3) -> dict:
     """
     Send CV text to Gemini for analysis.
     Tries the primary model (Flash) with retries, then falls back to the Pro model on API failures.
@@ -381,9 +398,11 @@ def analyze_cv(cv_text: str, job_description: str, core_skills: list = None, max
     """
     cv_text = _strip_pii(cv_text)
     core_skills_str = ", ".join(core_skills) if core_skills else "None specified"
+    education_level_str = education_level if education_level else "None specified"
     prompt = CV_SCREENING_PROMPT.format(
         job_description=job_description,
         core_skills=core_skills_str,
+        education_level=education_level_str,
         cv_text=cv_text
     )
 
