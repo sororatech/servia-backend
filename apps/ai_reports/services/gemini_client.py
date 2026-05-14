@@ -80,7 +80,7 @@ class GeminiResponseError(Exception):
 
 CV_SCREENING_RESPONSE_SCHEMA = {
     "type": "object",
-    "required": ["fit_score", "summary", "strengths", "weaknesses", "feedback", "extracted_skills", "skills_match_details"],
+    "required": ["fit_score", "summary", "strengths", "weaknesses", "feedback", "extracted_skills"],
     "properties": {
         "fit_score": {"type": "integer"},
         "summary": {"type": "string"},
@@ -90,7 +90,7 @@ CV_SCREENING_RESPONSE_SCHEMA = {
         "extracted_skills": {"type": "array", "items": {"type": "string"}},
         "skills_match_details": {
             "type": "object",
-            "required": ["matched_skills", "missing_skills", "match_explanation"],
+            "required": [],
             "properties": {
                 "matched_skills": {"type": "array", "items": {"type": "string"}},
                 "missing_skills": {"type": "array", "items": {"type": "string"}},
@@ -166,7 +166,7 @@ def _call_model(model, prompt: str) -> dict:
 
     result = extract_json_object(response.text.strip())
 
-    required_fields = ['fit_score', 'summary', 'strengths', 'weaknesses', 'feedback', 'extracted_skills', 'skills_match_details']
+    required_fields = ['fit_score', 'summary', 'strengths', 'weaknesses', 'feedback', 'extracted_skills']
     for field in required_fields:
         if field not in result:
             raise GeminiResponseError(f"Missing required field: {field}")

@@ -15,7 +15,8 @@ from django.conf import settings
 from apps.job.models import Job 
 from .services.storage import generate_signed_url
 from apps.users.tasks import send_html_email
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.throttling import UserRateThrottle
 
 logger = logging.getLogger(__name__)
 def _check_upload_permission(candidate, user):
@@ -474,8 +475,12 @@ class MyApplicationsStatsViewSet(viewsets.ViewSet):
         }
         
         return Response(stats)
+
+class BulkUpdateThrottle(UserRateThrottle):
+    scope = 'bulk_update'
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
+@throttle_classes([BulkUpdateThrottle])  
 def bulk_update_status(request):
     """
     Bulk update status for multiple candidates.
@@ -518,12 +523,7 @@ def bulk_update_status(request):
         
         # Send email notification
         from apps.candidate.services.email_notifications import send_status_email
-        send_status_email(candidate, new_status, old_status)
-        user_uuid = str(request.user.pk) if request.user.pk else None
-        if user_uuid and isinstance(user_uuid, uuid.UUID):
-            created_by_uuid = str(user_uuid)
-        else:
-            created_by_uuid = None  
+        send_status_email(candidate, new_status, old_status)  
 
         ActivityLog.objects.create(
             candidate=candidate,
