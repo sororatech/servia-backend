@@ -170,6 +170,7 @@ class CVUploadConfirmView(APIView):
         import tempfile
         import requests
         import os
+        import magic  
         
         candidate = Candidate.objects.get(id=candidate_id)
         file_key = request.data.get('file_key')
@@ -177,23 +178,42 @@ class CVUploadConfirmView(APIView):
         if not file_key:
             return Response({'error': 'file_key required'}, status=400)
 
-        candidate.cv_file = file_key
-        candidate.cv_filename = filename
-        candidate.cv_uploaded_at = timezone.now()
-        candidate.cv_status = 'processing'
-        candidate.save()
+        download_url = generate_signed_url(file_key, method='get_object', expires_in=300)
+        response = requests.get(download_url)
+        
+        file_ext = filename.split('.')[-1].lower()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_ext}') as tmp:
+            tmp.write(response.content)
+            tmp_path = tmp.name
         
         try:
+            mime = magic.from_file(tmp_path, mime=True)
+            
+            ALLOWED_MIMES = {
+                'pdf': 'application/pdf',
+                'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'doc': 'application/msword',
+                'png': 'image/png',
+                'jpg': 'image/jpeg',
+                'jpeg': 'image/jpeg',
+            }
+            
+            expected_mime = ALLOWED_MIMES.get(file_ext)
+            if not expected_mime:
+                os.unlink(tmp_path)
+                return Response(
+                    {'error': f'File extension .{file_ext} not supported'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if mime != expected_mime:
+                os.unlink(tmp_path)
+                return Response(
+                    {'error': f'File content does not match extension. Expected {expected_mime}, got {mime}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
             from apps.candidate.services.text_extraction import extract_cv_text
-            
-            download_url = generate_signed_url(file_key, method='get_object', expires_in=300)
-            response = requests.get(download_url)
-            
-            file_ext = filename.split('.')[-1].lower()
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_ext}') as tmp:
-                tmp.write(response.content)
-                tmp_path = tmp.name
-            
             extracted_text = extract_cv_text(tmp_path, file_ext)
             
             if not extracted_text:
@@ -205,35 +225,36 @@ class CVUploadConfirmView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
+            candidate.cv_file = file_key
+            candidate.cv_filename = filename
+            candidate.cv_uploaded_at = timezone.now()
             candidate.cv_text = extracted_text
             candidate.cv_status = 'processing'
             candidate.save()
 
             os.unlink(tmp_path)
 
-            job = candidate.job
-            job_description = (
-                f"Job Title: {job.title}\n\n"
-                f"Description:\n{job.description}\n\n"
-                f"Requirements:\n{job.requirements}"
+
+        except magic.MagicException:
+            os.unlink(tmp_path)
+            return Response(
+                {'error': 'Could not validate file format'},
+                status=status.HTTP_400_BAD_REQUEST
             )
-
-            from apps.ai_reports.tasks import analyze_cv_task
-            analyze_cv_task.delay(str(candidate.id), extracted_text, job_description)
-
-            ActivityLog.objects.create(
-                candidate=candidate,
-                event_type=ActivityLog.EventType.CV_UPLOADED,
-                note="CV uploaded and queued for AI analysis",
-                created_by_type=ActivityLog.CreatedByType.CANDIDATE,
-                created_by_id=request.user.id,
-            )
-
         except Exception as e:
             candidate.cv_status = 'error'
             candidate.save()
+            if 'tmp_path' in locals():
+                os.unlink(tmp_path)
+            # Log error for monitoring
+            logger.error(f"CV upload error for candidate {candidate_id}: {str(e)}")
+            return Response(
+                {'error': 'Server error during CV processing'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
         return Response({'status': 'CV uploaded successfully', 'cv_status': 'processing'})
+        
 class MyApplicationsViewSet(viewsets.ModelViewSet):
     """
     ViewSet for candidates to view their own applications.
