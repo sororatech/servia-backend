@@ -95,18 +95,41 @@ class CandidateViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("Only candidates can create applications.")
 
     def update(self, request, *args, **kwargs):
+        if not hasattr(request.user, 'recruiter_profile'):
+            raise PermissionDenied("Only recruiters can update application status.")
+
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
         old_status = instance.status
+        
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
+        
         new_status = instance.status
+        
+        # Send email notification if status changed
         if old_status != new_status:
             from apps.candidate.services.email_notifications import send_status_email
             send_status_email(instance, new_status, old_status)
+            
+            # Create ActivityLog for the status change
+            from apps.candidate.models import ActivityLog
+            ActivityLog.objects.create(
+                candidate=instance,
+                event_type=ActivityLog.EventType.SHORTLISTED if new_status == 'shortlisted'
+                           else ActivityLog.EventType.HOLD if new_status == 'hold'
+                           else ActivityLog.EventType.OFFERED if new_status == 'offered'
+                           else ActivityLog.EventType.REJECTED_CV if new_status == 'rejected_cv'
+                           else ActivityLog.EventType.REJECTED_INTERVIEW if new_status == 'rejected_interview'
+                           else None,
+                note=f"Status changed from {old_status} to {new_status}",
+                created_by_type=ActivityLog.CreatedByType.RECRUITER,
+                created_by_id=None,
+                visibility=ActivityLog.Visibility.BOTH,
+            )
+        
         return Response(serializer.data)
-
 
 class ActivityLogViewSet(viewsets.ModelViewSet):
     serializer_class = ActivityLogSerializer
@@ -168,7 +191,7 @@ class VideoUploadView(APIView):
                 event_type=ActivityLog.EventType.VIDEO_UPLOADED,
                 note="Video uploaded successfully",
                 created_by_type=ActivityLog.CreatedByType.CANDIDATE,
-                created_by_id=request.user.id
+                created_by_id=None,
             )
             
             return Response({'message': 'Video uploaded successfully'}, status=200)
@@ -195,7 +218,7 @@ class CVUploadURLView(APIView):
         is_allowed, error_msg = _check_upload_permission(candidate, request.user)
         if not is_allowed:
             return Response({'error': error_msg}, status=status.HTTP_403_FORBIDDEN)
-        
+
         file_extension = request.data.get('file_extension', 'pdf').lower()
         
         allowed_formats = ['pdf', 'docx', 'png', 'jpg', 'jpeg']
@@ -209,24 +232,25 @@ class CVUploadURLView(APIView):
             'jpg': 'image/jpeg',
             'jpeg': 'image/jpeg',
         }
-        content_type = content_type_map.get(file_extension, 'application/octet-stream')
+        content_type = content_type_map.get(file_extension)
 
         file_key = f'cv/{candidate_id}/{uuid.uuid4()}.{file_extension}'
         file_size = request.data.get('file_size', 0)
-        max_size = getattr(settings, 'MAX_CV_SIZE_MB', 10) * 1024 * 1024  # 10MB default
-    
+        max_size = getattr(settings, 'MAX_CV_SIZE_MB', 10) * 1024 * 1024
+
         if file_size and file_size > max_size:
             return Response({
                 'error': f'File size exceeds {max_size // (1024*1024)}MB limit.'
-            }, status=status.HTTP_400_BAD_REQUEST)      
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         signed_url = generate_signed_url(
-            file_key, 
-            method='put_object', 
-            expires_in=900,  # 15 minutes
-            content_type=content_type 
+            file_key,
+            method='put_object',
+            expires_in=900,          # 15 minutes
+            content_type=content_type
         )
         return Response({
-            'upload_url': signed_url, 
+            'upload_url': signed_url,
             'file_key': file_key,
             'content_type': content_type,
         })
@@ -237,7 +261,7 @@ class CVUploadConfirmView(APIView):
         import tempfile
         import requests
         import os
-        
+        import magic
         try:
             candidate = Candidate.objects.select_related('user', 'job__posted_by').get(id=candidate_id)
         except Candidate.DoesNotExist:
@@ -246,86 +270,118 @@ class CVUploadConfirmView(APIView):
         is_allowed, error_msg = _check_upload_permission(candidate, request.user)
         if not is_allowed:
             return Response({'error': error_msg}, status=status.HTTP_403_FORBIDDEN)
-        
+
         file_key = request.data.get('file_key')
-        filename = request.data.get('filename', '')  
+        client_filename = request.data.get('filename', '')
         if not file_key:
             return Response({'error': 'file_key required'}, status=400)
 
-        candidate.cv_file = file_key
-        candidate.cv_filename = filename
-        candidate.cv_uploaded_at = timezone.now()
-        candidate.cv_status = 'processing'
-        candidate.save()
-        
-        try:
-            from apps.candidate.services.text_extraction import extract_cv_text
-            
-            download_url = generate_signed_url(file_key, method='get_object', expires_in=300)
-            response = requests.get(download_url)
-            
-            file_ext = filename.split('.')[-1].lower()
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_ext}') as tmp:
-                tmp.write(response.content)
-                tmp_path = tmp.name
-            
-            extracted_text = extract_cv_text(tmp_path, file_ext)
-            
-            if not extracted_text:
-                candidate.cv_status = 'error'
-                candidate.save()
-                os.unlink(tmp_path)
-                return Response(
-                    {'error': 'Could not extract text from CV. Please upload a text-based PDF or DOCX.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            candidate.cv_text = extracted_text
-            candidate.cv_status = 'processing'
-            candidate.save()
+        # Prevent duplicate confirmation
+        if candidate.cv_file == file_key:
+            return Response({'error': 'This CV has already been confirmed.'}, status=400)
 
+        # Store file reference (text not yet extracted)
+        candidate.cv_file = file_key
+        candidate.cv_filename = client_filename
+        candidate.cv_uploaded_at = timezone.now()
+        candidate.save(update_fields=['cv_file', 'cv_filename', 'cv_uploaded_at'])
+
+        try:
+            # 1. Download the file from R2
+            download_url = generate_signed_url(file_key, method='get_object', expires_in=300)
+            logger.info(f"Downloading CV from {download_url}")
+            resp = requests.get(download_url, timeout=30)
+            if resp.status_code != 200:
+                candidate.cv_status = 'error'
+                candidate.save(update_fields=['cv_status'])
+                return Response({'error': f'Failed to download CV (HTTP {resp.status_code})'}, status=400)
+
+            # 2. Save to temporary file for MIME detection & extraction
+            # Use a safe extension from the file_key (not from client)
+            ext = file_key.split('.')[-1].lower()
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as tmp:
+                tmp.write(resp.content)
+                tmp_path = tmp.name
+
+            # 3. Validate MIME type (magic bytes)
+            mime = magic.from_file(tmp_path, mime=True)
+            logger.info(f"Detected MIME type: {mime}")
+
+            ALLOWED_MIMES = {
+                'application/pdf': 'pdf',
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+                'image/png': 'png',
+                'image/jpeg': 'jpg',
+            }
+            if mime not in ALLOWED_MIMES:
+                os.unlink(tmp_path)
+                candidate.cv_status = 'error'
+                candidate.save(update_fields=['cv_status'])
+                return Response(
+                    {'error': f'Invalid file type: {mime}. Allowed: PDF, DOCX, PNG, JPEG.'},
+                    status=400
+                )
+
+            # Optional: Warn if extension mismatches actual MIME
+            detected_ext = ALLOWED_MIMES[mime]
+            if detected_ext != ext:
+                logger.warning(f"MIME extension mismatch: file_key says {ext}, but content is {detected_ext}")
+
+            # 4. Extract text using the detected extension
+            from apps.candidate.services.text_extraction import extract_cv_text
+            extracted_text = extract_cv_text(tmp_path, detected_ext)
             os.unlink(tmp_path)
 
-            # Only trigger if not already processing/analyzed
-            if candidate.cv_status not in [Candidate.CVStatus.PROCESSING, Candidate.CVStatus.ANALYZED]:
-                candidate.cv_status = Candidate.CVStatus.PROCESSING
+            if not extracted_text:
+                candidate.cv_status = 'error'
                 candidate.save(update_fields=['cv_status'])
-                
-                job = candidate.job
-                job_description = (
-                    f"Job Title: {job.title}\n\n"
-                    f"Description:\n{job.description}\n\n"
-                    f"Requirements:\n{job.requirements}"
+                return Response(
+                    {'error': 'Could not extract text from CV. Please upload a text‑based PDF or DOCX.'},
+                    status=400
                 )
 
-                from apps.ai_reports.tasks import analyze_cv_task
-                analyze_cv_task.delay(str(candidate.id), extracted_text, job_description)
+            # 5. Store extracted text
+            candidate.cv_text = extracted_text
+            candidate.save(update_fields=['cv_text'])
 
-                # Use proper UUID handling for ActivityLog
-                user_uuid = str(request.user.pk) if isinstance(request.user.pk, uuid.UUID) else None
-                
-                ActivityLog.objects.create(
-                    candidate=candidate,
-                    event_type=ActivityLog.EventType.AI_ANALYSIS_COMPLETE, 
-                    note="CV text extracted and AI analysis queued",
-                    created_by_type=ActivityLog.CreatedByType.CANDIDATE,
-                    created_by_id=user_uuid,
-                    visibility=ActivityLog.Visibility.BOTH,
-                )
-            else:
-                logger.info(f"CV analysis already in progress/complete for candidate {candidate.id}, skipping duplicate trigger")
+            # 6. QUEUE AI ANALYSIS (BEFORE setting cv_status)
+            job = candidate.job
+            core_skills_list = job.core_skills if job.core_skills else []
+            core_skills_str = ", ".join(core_skills_list) if core_skills_list else "None specified"
+            job_description = (
+                f"Job Title: {job.title}\n\n"
+                f"Description:\n{job.description or ''}\n\n"
+                f"Requirements:\n{job.requirements or ''}\n\n"
+                f"Core Skills Required:\n{core_skills_str}"
+            )
+            from apps.ai_reports.tasks import analyze_cv_task
+            analyze_cv_task.delay(str(candidate.id), extracted_text, job_description, core_skills_list)
+
+            # 7. Mark as processing
+            candidate.cv_status = Candidate.CVStatus.PROCESSING
+            candidate.save(update_fields=['cv_status'])
+
+            # 8. Create activity log
+            ActivityLog.objects.create(
+                candidate=candidate,
+                event_type=ActivityLog.EventType.AI_ANALYSIS_QUEUED,  # ensure this choice exists
+                note="AI analysis queued",
+                created_by_type=ActivityLog.CreatedByType.CANDIDATE,
+                created_by_id=None,
+                visibility=ActivityLog.Visibility.BOTH,
+            )
+
+            logger.info(f"CV confirmed & queued for candidate {candidate_id}")
+            return Response({'status': 'CV uploaded successfully', 'cv_status': 'processing'})
 
         except Exception as e:
+            logger.error(f"CV confirm failed for candidate {candidate_id}: {e}", exc_info=True)
             candidate.cv_status = 'error'
-            candidate.save()
-            logger.error(f"CV upload confirm failed for candidate {candidate_id}: {e}", exc_info=True)
+            candidate.save(update_fields=['cv_status'])
             return Response(
                 {'error': 'Failed to process CV. Please try again.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
-        return Response({'status': 'CV uploaded successfully', 'cv_status': 'processing'})
-
 class MyApplicationsViewSet(viewsets.ModelViewSet):
     """
     ViewSet for candidates to view their own applications.
@@ -459,7 +515,7 @@ def bulk_update_status(request):
         # Send email notification
         from apps.candidate.services.email_notifications import send_status_email
         send_status_email(candidate, new_status, old_status)
-        user_uuid = getattr(request.user, 'pk', None)
+        user_uuid = str(request.user.pk) if request.user.pk else None
         if user_uuid and isinstance(user_uuid, uuid.UUID):
             created_by_uuid = str(user_uuid)
         else:
@@ -470,7 +526,7 @@ def bulk_update_status(request):
             event_type=ActivityLog.EventType.SHORTLISTED if new_status == Candidate.Status.SHORTLISTED else ActivityLog.EventType.HOLD,
             note=f"Status changed from {old_status} to {new_status} via bulk update",
             created_by_type=ActivityLog.CreatedByType.RECRUITER,
-            created_by_id=created_by_uuid, 
+            created_by_id=None, 
             visibility=ActivityLog.Visibility.BOTH,
         )
         updated_count += 1

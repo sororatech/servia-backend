@@ -19,6 +19,9 @@ against the provided job requirements.
 JOB REQUIREMENTS:
 {job_description}
 
+CORE SKILLS (explicit list to check):
+{core_skills}
+
 CANDIDATE CV TEXT:
 {cv_text}
 
@@ -51,6 +54,7 @@ For skills_match_details:
 - matched_skills: List skills from the CV that satisfy job requirements (include synonyms, e.g., "web development" matches "HTML/CSS")
 - missing_skills: List key job requirements NOT found in the CV
 - match_explanation: Briefly explain how the candidate's skills align with the job (e.g., "Candidate's web development experience covers the required HTML/CSS skills")
+- For each core skill, check if it appears (or a clear synonym) in the CV.
 
 Return ONLY the JSON object — no extra text, no markdown,
 no code blocks.
@@ -369,15 +373,17 @@ def analyze_interview(transcripts: list) -> dict:
     return {}
 
 
-def analyze_cv(cv_text: str, job_description: str, max_retries: int = 3) -> dict:
+def analyze_cv(cv_text: str, job_description: str, core_skills: list = None, max_retries: int = 3) -> dict:
     """
     Send CV text to Gemini for analysis.
     Tries the primary model (Flash) with retries, then falls back to the Pro model on API failures.
     Returns parsed JSON response.
     """
     cv_text = _strip_pii(cv_text)
+    core_skills_str = ", ".join(core_skills) if core_skills else "None specified"
     prompt = CV_SCREENING_PROMPT.format(
         job_description=job_description,
+        core_skills=core_skills_str,
         cv_text=cv_text
     )
 

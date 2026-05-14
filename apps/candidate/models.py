@@ -75,6 +75,7 @@ class ActivityLog(models.Model):
         ACCOUNT_CREATED = 'account_created', 'Account Created'
         APPLICATION_SUBMITTED = 'application_submitted', 'Application Submitted'
         CV_UPLOADED = 'cv_uploaded', 'CV Uploaded'
+        AI_ANALYSIS_QUEUED = 'ai_analysis_queued', 'AI Analysis Queued'
         AI_ANALYSIS_COMPLETE = 'ai_analysis_complete', 'AI Analysis Complete'
         SHORTLISTED = 'shortlisted', 'Shortlisted'
         REJECTED_CV = 'rejected_cv', 'Rejected CV'
