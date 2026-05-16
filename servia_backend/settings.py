@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'django_rest_passwordreset',
     'drf_spectacular',
     'django_celery_results',
+    'adminpanel',
 
 ]
 
@@ -75,11 +76,15 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'servia_backend.wsgi.application'
 ASGI_APPLICATION = 'servia_backend.asgi.application'
-
 DATABASE_URL = os.getenv('DATABASE_URL')
+
 if DATABASE_URL:
     DATABASES = {
-        'default': dj_database_url.parse(DATABASE_URL)
+        'default': dj_database_url.parse(
+            DATABASE_URL,
+            conn_max_age=600,
+            ssl_require=True
+        )
     }
 else:
     # Fallback for Docker
