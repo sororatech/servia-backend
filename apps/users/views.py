@@ -12,6 +12,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.parsers import JSONParser
 from django.core.validators import validate_email
+from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.contrib.auth import authenticate
 from django.db import IntegrityError
@@ -532,10 +533,6 @@ class UserProfileDetailView(APIView):
 
 
 class ChangePasswordView(APIView):
-    """
-    Change user password.
-    Expects: old_password, new_password1, new_password2
-    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -553,8 +550,20 @@ class ChangePasswordView(APIView):
         if not user.check_password(old_password):
             return Response({'error': 'Old password is incorrect'}, status=400)
 
-        # Validate password strength (optional, uses Django validators)
-        from django.contrib.auth.password_validation import validate_password
+        errors = []
+        if len(new_password1) < 8:
+            errors.append('Password must be at least 8 characters long.')
+        if not re.search(r'[A-Z]', new_password1):
+            errors.append('Password must contain at least one uppercase letter.')
+        if not re.search(r'[a-z]', new_password1):
+            errors.append('Password must contain at least one lowercase letter.')
+        if not re.search(r'[0-9]', new_password1):
+            errors.append('Password must contain at least one number.')
+        if not re.search(r'[^A-Za-z0-9]', new_password1):
+            errors.append('Password must contain at least one special character.')
+
+        if errors:
+            return Response({'error': errors}, status=400)
         try:
             validate_password(new_password1, user)
         except ValidationError as e:
@@ -563,7 +572,6 @@ class ChangePasswordView(APIView):
         user.set_password(new_password1)
         user.save()
 
-        # Optionally delete all tokens except current? Or just return success
         return Response({'message': 'Password changed successfully'}, status=200)
 class AvatarUploadURLView(APIView):
     permission_classes = [IsAuthenticated]
