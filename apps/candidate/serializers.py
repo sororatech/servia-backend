@@ -77,6 +77,37 @@ class CandidateSerializer(serializers.ModelSerializer):
             # Log error but don't break the response
             logger.error(f"Failed to generate CV download URL for candidate {obj.id}: {e}", exc_info=True)
             return None
+    cv_preview_url = serializers.SerializerMethodField()
+
+    def get_cv_preview_url(self, obj):
+        """Generate signed R2 URL for CV preview (inline display)"""
+        if not obj.cv_file:
+            return None
+        try:
+            r2_config = Config(
+                signature_version='s3v4',
+                region_name='auto',
+            )
+            r2_client = boto3.client(
+                's3',
+                endpoint_url=settings.CLOUDFLARE_R2_ENDPOINT,
+                aws_access_key_id=settings.CLOUDFLARE_R2_ACCESS_KEY,
+                aws_secret_access_key=settings.CLOUDFLARE_R2_SECRET_KEY,
+                config=r2_config,
+            )
+            url = r2_client.generate_presigned_url(
+                'get_object',
+                Params={
+                    'Bucket': settings.CLOUDFLARE_R2_BUCKET,
+                    'Key': obj.cv_file,
+                    'ResponseContentDisposition': f'inline; filename="{obj.cv_filename}"'
+                },
+                ExpiresIn=3600
+            )
+            return url
+        except Exception as e:
+            logger.error(f"Failed to generate CV preview URL for candidate {obj.id}: {e}", exc_info=True)
+            return None
     def validate(self, data):
         """Prevent duplicate applications (same user + job)"""
         user = self.context['request'].user

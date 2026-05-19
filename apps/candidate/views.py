@@ -398,6 +398,30 @@ class CVUploadConfirmView(APIView):
                 {'error': 'Failed to process CV. Please try again.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+class CVPreviewURLView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, candidate_id):
+        try:
+            candidate = Candidate.objects.select_related('user', 'job__posted_by').get(id=candidate_id)
+        except Candidate.DoesNotExist:
+            return Response({'error': 'Application not found.'}, status=404)
+        
+        is_allowed, error_msg = _check_upload_permission(candidate, request.user)
+        if not is_allowed:
+            return Response({'error': error_msg}, status=403)
+        
+        if not candidate.cv_file:
+            return Response({'error': 'No CV uploaded'}, status=404)
+        
+        # Generate inline URL
+        url = generate_signed_url(
+            candidate.cv_file,
+            method='get_object',
+            expires_in=3600,
+            response_content_disposition=f'inline; filename="{candidate.cv_filename}"'
+        )
+        return Response({'preview_url': url})
 class MyApplicationsViewSet(viewsets.ModelViewSet):
     """
     ViewSet for candidates to view their own applications.
