@@ -7,18 +7,19 @@ from botocore.config import Config
 from apps.job.serializers import JobSerializer
 
 VALID_TRANSITIONS = {
-    Candidate.Status.APPLIED: [Candidate.Status.SCREENED, Candidate.Status.REJECTED_CV],
-    Candidate.Status.SCREENED: [Candidate.Status.SHORTLISTED, Candidate.Status.REJECTED_CV, Candidate.Status.HOLD],
-    Candidate.Status.SHORTLISTED: [Candidate.Status.VIDEO_SUBMITTED, Candidate.Status.INTERVIEW_SCHEDULED, Candidate.Status.REJECTED_CV],
-    Candidate.Status.VIDEO_SUBMITTED: [Candidate.Status.INTERVIEW_SCHEDULED, Candidate.Status.REJECTED_CV],
-    Candidate.Status.INTERVIEW_SCHEDULED: [Candidate.Status.INTERVIEWED, Candidate.Status.REJECTED_INTERVIEW],
-    Candidate.Status.INTERVIEWED: [Candidate.Status.OFFERED, Candidate.Status.REJECTED_INTERVIEW],
-    Candidate.Status.OFFERED: [Candidate.Status.HIRED, Candidate.Status.REJECTED_INTERVIEW],
-    # Terminal states
+    Candidate.Status.APPLIED: [Candidate.Status.SCREENED, Candidate.Status.REJECTED_CV, Candidate.Status.WITHDRAWN],
+    Candidate.Status.SCREENED: [Candidate.Status.SHORTLISTED, Candidate.Status.REJECTED_CV, Candidate.Status.HOLD, Candidate.Status.WITHDRAWN],
+    Candidate.Status.SHORTLISTED: [Candidate.Status.VIDEO_SUBMITTED, Candidate.Status.INTERVIEW_SCHEDULED, Candidate.Status.REJECTED_CV, Candidate.Status.WITHDRAWN],
+    Candidate.Status.VIDEO_SUBMITTED: [Candidate.Status.INTERVIEW_SCHEDULED, Candidate.Status.REJECTED_CV, Candidate.Status.WITHDRAWN],
+    Candidate.Status.INTERVIEW_SCHEDULED: [Candidate.Status.INTERVIEWED, Candidate.Status.REJECTED_INTERVIEW, Candidate.Status.WITHDRAWN],
+    Candidate.Status.INTERVIEWED: [Candidate.Status.OFFERED, Candidate.Status.REJECTED_INTERVIEW, Candidate.Status.WITHDRAWN],
+    Candidate.Status.OFFERED: [Candidate.Status.HIRED, Candidate.Status.REJECTED_INTERVIEW, Candidate.Status.WITHDRAWN],
+    Candidate.Status.HOLD: [Candidate.Status.SHORTLISTED, Candidate.Status.REJECTED_CV, Candidate.Status.WITHDRAWN],
+    # Terminal states have no transitions
     Candidate.Status.HIRED: [],
     Candidate.Status.REJECTED_CV: [],
     Candidate.Status.REJECTED_INTERVIEW: [],
-    Candidate.Status.HOLD: [Candidate.Status.SHORTLISTED, Candidate.Status.REJECTED_CV],
+    Candidate.Status.WITHDRAWN: [],
 }
 class UserBasicSerializer(serializers.ModelSerializer):
     """

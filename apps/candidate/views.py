@@ -73,8 +73,7 @@ class CandidateViewSet(viewsets.ModelViewSet):
             if job.application_deadline and job.application_deadline < now:
                 return Response({'job': ['Application deadline has passed.']}, status=status.HTTP_400_BAD_REQUEST)
 
-            existing = Candidate.objects.filter(user=user, job=job, deleted_at__isnull=True).first()
-
+            existing = Candidate.objects.filter(user=user, job=job, deleted_at__isnull=True).exclude(status=Candidate.Status.WITHDRAWN).first()
             if existing:
                 # Gracefully return existing application instead of creating duplicate
                 serializer = self.get_serializer(existing)
@@ -96,42 +95,54 @@ class CandidateViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("Only candidates can create applications.")
 
     def update(self, request, *args, **kwargs):
-        if not hasattr(request.user, 'recruiter_profile'):
+        instance = self.get_object()
+        user = request.user
+        new_status = request.data.get('status')
+
+        # Allow candidate to withdraw their own application
+        if new_status == Candidate.Status.WITHDRAWN and hasattr(user, 'candidate_profile') and instance.user == user:
+            pass
+        elif not hasattr(user, 'recruiter_profile'):
             raise PermissionDenied("Only recruiters can update application status.")
 
         partial = kwargs.pop('partial', False)
-        instance = self.get_object()
         old_status = instance.status
-        
+
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
-        
+
         new_status = instance.status
-        
+
         # Send email notification if status changed
         if old_status != new_status:
             from apps.candidate.services.email_notifications import send_status_email
             send_status_email(instance, new_status, old_status)
-            
+
             # Create ActivityLog for the status change
             from apps.candidate.models import ActivityLog
             ActivityLog.objects.create(
                 candidate=instance,
-                event_type=ActivityLog.EventType.SHORTLISTED if new_status == 'shortlisted'
-                           else ActivityLog.EventType.HOLD if new_status == 'hold'
-                           else ActivityLog.EventType.OFFERED if new_status == 'offered'
-                           else ActivityLog.EventType.REJECTED_CV if new_status == 'rejected_cv'
-                           else ActivityLog.EventType.REJECTED_INTERVIEW if new_status == 'rejected_interview'
-                           else None,
+                event_type=self._get_event_type_for_status(new_status),
                 note=f"Status changed from {old_status} to {new_status}",
-                created_by_type=ActivityLog.CreatedByType.RECRUITER,
+                created_by_type=ActivityLog.CreatedByType.CANDIDATE if new_status == Candidate.Status.WITHDRAWN and hasattr(user, 'candidate_profile') else ActivityLog.CreatedByType.RECRUITER,
                 created_by_id=None,
                 visibility=ActivityLog.Visibility.BOTH,
             )
-        
+
         return Response(serializer.data)
 
+    def _get_event_type_for_status(self, status):
+        """Helper to map status to ActivityLog event type"""
+        status_map = {
+            Candidate.Status.SHORTLISTED: ActivityLog.EventType.SHORTLISTED,
+            Candidate.Status.HOLD: ActivityLog.EventType.HOLD,
+            Candidate.Status.OFFERED: ActivityLog.EventType.OFFERED,
+            Candidate.Status.REJECTED_CV: ActivityLog.EventType.REJECTED_CV,
+            Candidate.Status.REJECTED_INTERVIEW: ActivityLog.EventType.REJECTED_INTERVIEW,
+            Candidate.Status.WITHDRAWN: ActivityLog.EventType.WITHDRAWN,
+        }
+        return status_map.get(status, None)
 class ActivityLogViewSet(viewsets.ModelViewSet):
     serializer_class = ActivityLogSerializer
     permission_classes = [permissions.IsAuthenticated]

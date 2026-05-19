@@ -15,6 +15,7 @@ class Candidate(models.Model):
         OFFERED = 'offered', 'Offered'
         HIRED = 'hired', 'Hired'
         REJECTED_CV = 'rejected_cv', 'Rejected CV'
+        WITHDRAWN = 'withdrawn', 'Withdrawn'
         REJECTED_INTERVIEW = 'rejected_interview', 'Rejected Interview'
         HOLD = 'hold', 'Hold'
 
@@ -79,6 +80,7 @@ class ActivityLog(models.Model):
         AI_ANALYSIS_COMPLETE = 'ai_analysis_complete', 'AI Analysis Complete'
         SHORTLISTED = 'shortlisted', 'Shortlisted'
         REJECTED_CV = 'rejected_cv', 'Rejected CV'
+        WITHDRAWN = 'withdrawn', 'Withdrawn'
         VIDEO_UPLOADED = 'video_uploaded', 'Video Uploaded'
         INTERVIEW_SCHEDULED = 'interview_scheduled', 'Interview Scheduled'
         INTERVIEW_CONFIRMED = 'interview_confirmed', 'Interview Confirmed'

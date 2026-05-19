@@ -1,12 +1,18 @@
 import logging
 import random
+import re
+from django.db.models import Q
+import uuid
 from datetime import timedelta
-
+from apps.candidate.services.storage import generate_signed_url
 from rest_framework import viewsets, permissions, status, views
 from rest_framework.authtoken.models import Token
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.parsers import JSONParser
+from django.core.validators import validate_email
+from django.core.exceptions import ValidationError
 from django.contrib.auth import authenticate
 from django.db import IntegrityError
 from django.contrib.auth import get_user_model
@@ -18,7 +24,8 @@ from django.core.cache import cache
 from django.views.decorators.cache import never_cache
 from django.utils.decorators import method_decorator
 from django.utils import timezone
-
+from apps.job.models import Job
+from apps.candidate.models import Candidate
 from .models import CandidateUser, RecruiterUser
 from .serializers import CandidateUserSerializer, RecruiterUserSerializer
 from apps.users.tasks import send_welcome_email, send_password_reset_email
@@ -86,7 +93,9 @@ class CustomAuthToken(APIView):
             user_type = 'recruiter'
 
         token, _ = Token.objects.get_or_create(user=user)
-
+        is_admin = False
+        if hasattr(user, 'recruiter_profile') and user.recruiter_profile.role == RecruiterUser.Role.ADMIN:
+            is_admin = True
         response = Response({
             'user_id': user.id,
             'user_type': user_type,
@@ -94,6 +103,7 @@ class CustomAuthToken(APIView):
             'email': user.email,
             'first_name': user.first_name,
             'last_name': user.last_name,
+            'is_admin': is_admin,
         }, status=status.HTTP_200_OK)
 
         response.set_cookie(
@@ -189,9 +199,6 @@ class CandidateRegistrationView(APIView):
 
                                 verification_code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
                                 cache.set(f'verify_email_{user.email}', verification_code, timeout=600)
-
-                                # Print verification code to console during development
-                                print(f"\n📧 VERIFICATION CODE for {user.email}: {verification_code}\n")
 
                                 send_welcome_email.delay(user.id)
 
@@ -425,15 +432,25 @@ class ResendVerificationView(APIView):
             status=status.HTTP_200_OK
         )
 
-
-class UserProfileView(APIView):
-    """Get current user profile"""
+class UserProfileDetailView(APIView):
+    """
+    Get and update current user profile.
+    GET: returns profile
+    PATCH: updates user fields + profile fields (phone, location, department)
+    """
     permission_classes = [IsAuthenticated]
-    
+
     def get(self, request):
         user = request.user
-        
         user_type = None
+        profile = None
+        if user.is_superuser and not hasattr(user, 'recruiter_profile'):
+            RecruiterUser.objects.create(
+                user=user,
+                role=RecruiterUser.Role.ADMIN,
+                is_active=True,
+            )
+            user.refresh_from_db()
         if hasattr(user, 'candidate_profile'):
             user_type = 'candidate'
             profile = user.candidate_profile
@@ -441,19 +458,183 @@ class UserProfileView(APIView):
             user_type = 'recruiter'
             profile = user.recruiter_profile
         else:
-            return Response(
-                {'error': 'User profile not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        response_data = {
+            return Response({'error': 'Profile not found'}, status=404)
+
+        data = {
             'id': user.id,
             'email': user.email,
             'first_name': user.first_name,
             'last_name': user.last_name,
             'user_type': user_type,
+            'phone': getattr(profile, 'phone', None),
+            'location': getattr(profile, 'location', None),
+            'department': getattr(profile, 'department', None),
+            'is_admin': profile.role == RecruiterUser.Role.ADMIN if hasattr(user, 'recruiter_profile') else False,
             'profile_photo': getattr(profile, 'profile_photo', None),
+            'date_joined': user.date_joined,
         }
-        
-        return Response(response_data)
+        avatar_url = None
+        if profile and profile.profile_photo:
+            try:
+                avatar_url = generate_signed_url(profile.profile_photo, method='get_object', expires_in=3600)
+            except Exception as e:
+                logger.error(f"Failed to generate avatar URL: {e}")
+        data['avatar_url'] = avatar_url
+        return Response(data)
 
+    def patch(self, request):
+        user = request.user
+        data = request.data
+
+        # Validate email uniqueness and format
+        if 'email' in data and data['email'] != user.email:
+            if User.objects.filter(email=data['email']).exclude(id=user.id).exists():
+                return Response({'error': 'A user with this email already exists.'}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                validate_email(data['email'])
+            except ValidationError:
+                return Response({'error': 'Invalid email format.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Validate phone format (allow digits, spaces, +, -, parentheses)
+        if 'phone' in data and data['phone']:
+            phone_regex = r'^[\+\d\s\-\(\)]{8,20}$'
+            if not re.match(phone_regex, data['phone']):
+                return Response({'error': 'Invalid phone number format. Use international format (e.g., +251911223344).'}, status=400)
+
+        # Validate location (if provided, must be >= 2 chars)
+        if 'location' in data and data['location'] and len(data['location'].strip()) < 2:
+            return Response({'error': 'Location must be at least 2 characters.'}, status=400)
+
+        # Update User fields
+        user_fields = ['first_name', 'last_name', 'email']
+        for field in user_fields:
+            if field in data:
+                setattr(user, field, data[field])
+        user.save()
+
+        # Update profile fields
+        if hasattr(user, 'candidate_profile'):
+            profile = user.candidate_profile
+            profile_fields = ['phone', 'location', 'nationality']
+            for field in profile_fields:
+                if field in data:
+                    setattr(profile, field, data[field])
+            profile.save()
+        elif hasattr(user, 'recruiter_profile'):
+            profile = user.recruiter_profile
+            profile_fields = ['phone', 'location', 'department']
+            for field in profile_fields:
+                if field in data:
+                    setattr(profile, field, data[field])
+            profile.save()
+
+        return self.get(request)
+
+
+class ChangePasswordView(APIView):
+    """
+    Change user password.
+    Expects: old_password, new_password1, new_password2
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        old_password = request.data.get('old_password')
+        new_password1 = request.data.get('new_password1')
+        new_password2 = request.data.get('new_password2')
+
+        if not old_password or not new_password1 or not new_password2:
+            return Response({'error': 'All password fields are required'}, status=400)
+
+        if new_password1 != new_password2:
+            return Response({'error': 'New passwords do not match'}, status=400)
+
+        user = request.user
+        if not user.check_password(old_password):
+            return Response({'error': 'Old password is incorrect'}, status=400)
+
+        # Validate password strength (optional, uses Django validators)
+        from django.contrib.auth.password_validation import validate_password
+        try:
+            validate_password(new_password1, user)
+        except ValidationError as e:
+            return Response({'error': e.messages}, status=400)
+
+        user.set_password(new_password1)
+        user.save()
+
+        # Optionally delete all tokens except current? Or just return success
+        return Response({'message': 'Password changed successfully'}, status=200)
+class AvatarUploadURLView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        file_extension = request.data.get('file_extension', 'jpg').lower()
+        allowed = ['jpg', 'jpeg', 'png', 'gif', 'webp']
+        if file_extension not in allowed:
+            return Response({'error': 'Unsupported file format.'}, status=400)
+
+        content_type_map = {
+            'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
+            'gif': 'image/gif', 'webp': 'image/webp'
+        }
+        content_type = content_type_map.get(file_extension)
+
+        user = request.user
+        file_key = f'avatars/{user.id}/{uuid.uuid4()}.{file_extension}'
+        signed_url = generate_signed_url(file_key, method='put_object', expires_in=900, content_type=content_type)
+        return Response({'upload_url': signed_url, 'file_key': file_key, 'content_type': content_type})
+
+class AvatarUploadConfirmView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        file_key = request.data.get('file_key')
+        if not file_key:
+            return Response({'error': 'file_key required'}, status=400)
+
+        user = request.user
+        # Determine which profile model to update
+        if hasattr(user, 'candidate_profile'):
+            profile = user.candidate_profile
+        elif hasattr(user, 'recruiter_profile'):
+            profile = user.recruiter_profile
+        else:
+            return Response({'error': 'Profile not found'}, status=404)
+
+        profile.profile_photo = file_key
+        profile.save(update_fields=['profile_photo'])
+        return Response({'message': 'Avatar updated successfully', 'file_key': file_key})
+
+class RecruiterStatsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        if not hasattr(user, 'recruiter_profile'):
+            return Response({'error': 'Recruiter profile not found'}, status=404)
+
+        recruiter = user.recruiter_profile
+        now = timezone.now()
+
+        # Jobs posted by this recruiter (active, not deleted, deadline not passed or null)
+        jobs = Job.objects.filter(
+            posted_by=recruiter,
+            is_active=True,
+            deleted_at__isnull=True
+        ).filter(Q(application_deadline__isnull=True) | Q(application_deadline__gt=now))
+
+        total_jobs = jobs.count()
+
+        # Candidates who applied to those jobs
+        candidates = Candidate.objects.filter(job__in=jobs, deleted_at__isnull=True)
+        total_candidates = candidates.count()
+
+        # Pending review: status 'applied' or 'screened'
+        pending_review = candidates.filter(status__in=['applied', 'screened']).count()
+
+        return Response({
+            'total_jobs': total_jobs,
+            'total_candidates': total_candidates,
+            'pending_review': pending_review,
+        })
