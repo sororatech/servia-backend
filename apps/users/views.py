@@ -22,14 +22,18 @@ from django.core.cache import cache
 from django.views.decorators.cache import never_cache
 from django.utils.decorators import method_decorator
 from django.utils import timezone
-
 from .models import CandidateUser, RecruiterUser
 from .serializers import CandidateUserSerializer, RecruiterUserSerializer
 from apps.users.tasks import send_welcome_email, send_password_reset_email, send_verification_email
+from rest_framework.throttling import UserRateThrottle
+from apps.candidate.models import Candidate
+from apps.interview.models import Interview
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
+class LoginThrottle(UserRateThrottle):
+    scope = 'login'
 
 class CandidateUserViewSet(viewsets.ModelViewSet):
     """
@@ -54,6 +58,7 @@ class CustomAuthToken(APIView):
     Custom login endpoint that accepts email/password and returns a token.
     Uses Django's authenticate with username=email (since we set username to email).
     """
+    throttle_classes = [LoginThrottle]
     permission_classes = []
     authentication_classes = []
 
@@ -92,8 +97,9 @@ class CustomAuthToken(APIView):
         token, _ = Token.objects.get_or_create(user=user)
 
         response = Response({
-            'user_id': user.id,
+            'user_id': str(user.id),
             'user_type': user_type,
+            'token': token.key,
             'email': user.email,
             'first_name': user.first_name,
             'last_name': user.last_name,
@@ -144,10 +150,8 @@ class CandidateRegistrationView(APIView):
                 verification_code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
                 cache.set(f'verify_email_{user.email}', verification_code, timeout=600)
 
-                # Send verification email
                 send_verification_email.delay(user.email, verification_code, user.first_name or user.email)
                 
-                # Log to console for development
                 logger.info(f"Verification code for {user.email}: {verification_code}")
                 
                 send_welcome_email.delay(user.id)
@@ -199,10 +203,8 @@ class CandidateRegistrationView(APIView):
                                 verification_code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
                                 cache.set(f'verify_email_{user.email}', verification_code, timeout=600)
 
-                                # Send verification email (FIXED: use correct variables)
                                 send_verification_email.delay(user.email, verification_code, user.first_name or user.email)
 
-                                # Log to console for development
                                 logger.info(f"Verification code for {user.email}: {verification_code}")
 
                                 send_welcome_email.delay(user.id)
@@ -432,10 +434,8 @@ class ResendVerificationView(APIView):
         code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
         cache.set(f'verify_email_{email}', code, timeout=600)
         
-        # Send verification email
         send_verification_email.delay(email, code, user.first_name or email)
         
-        # Log to console for development
         logger.info(f"Verification code for {email}: {code}")
         
         return Response(
@@ -445,43 +445,13 @@ class ResendVerificationView(APIView):
 
 
 class UserProfileView(APIView):
-    """Get current user profile"""
-    permission_classes = [IsAuthenticated]
-    
-    def get(self, request):
-        user = request.user
-        
-        user_type = None
-        if hasattr(user, 'candidate_profile'):
-            user_type = 'candidate'
-            profile = user.candidate_profile
-        elif hasattr(user, 'recruiter_profile'):
-            user_type = 'recruiter'
-            profile = user.recruiter_profile
-        else:
-            return Response(
-                {'error': 'User profile not found'},
-                status=status.HTTP_404_NOT_FOUND
-            )
-        
-        response_data = {
-            'id': user.id,
-            'email': user.email,
-            'first_name': user.first_name,
-            'last_name': user.last_name,
-            'user_type': user_type,
-            'profile_photo': getattr(profile, 'profile_photo', None),
-        }
-        
-        return Response(response_data)
-class UserProfileView(APIView):
     """
     API view for users to view and update their own profile.
     
     GET: View own profile
     PATCH: Update own profile (partial update)
     """
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAuthenticated]
     
     def get(self, request):
         """Get current user's profile"""
@@ -516,5 +486,60 @@ class UserProfileView(APIView):
             )
             candidate_serializer.is_valid(raise_exception=True)
             candidate_serializer.save()
+            
         response_serializer = UserProfileSerializer(user)
         return Response(response_serializer.data)
+  
+
+class RecruiterStatsView(APIView):
+    """
+    Get aggregated stats for recruiter dashboard.
+    Only returns data for THIS recruiter's jobs/candidates.
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        if not hasattr(request.user, 'recruiter_profile'):
+            return Response(
+                {'error': 'Access denied. Recruiter profile required.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        recruiter = request.user.recruiter_profile
+        
+        total_candidates = Candidate.objects.filter(
+            job__posted_by=recruiter,
+            deleted_at__isnull=True
+        ).count()
+        
+        shortlisted = Candidate.objects.filter(
+            job__posted_by=recruiter,
+            status='shortlisted',
+            deleted_at__isnull=True
+        ).count()
+        
+        now = timezone.now()
+        start_of_week = now - timedelta(days=now.weekday() + 1)
+        end_of_week = start_of_week + timedelta(days=6)
+        
+        interviews_this_week = Interview.objects.filter(
+            recruiter=recruiter,
+            scheduled_time__gte=start_of_week,
+            scheduled_time__lte=end_of_week,
+            status__in=['scheduled', 'confirmed', 'in_progress']
+        ).count()
+        
+        from django.db.models import Avg
+        avg_score_result = Candidate.objects.filter(
+            job__posted_by=recruiter,
+            ai_score__isnull=False,
+            deleted_at__isnull=True
+        ).aggregate(avg=Avg('ai_score'))
+        avg_ai_score = round(avg_score_result['avg'], 1) if avg_score_result['avg'] else None
+        
+        return Response({
+            'totalCandidates': total_candidates,
+            'shortlisted': shortlisted,
+            'interviewsThisWeek': interviews_this_week,
+            'avgAiScore': avg_ai_score,
+        }, status=status.HTTP_200_OK)

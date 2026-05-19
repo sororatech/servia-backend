@@ -18,12 +18,15 @@ logger = logging.getLogger(__name__)
 class CandidateViewSet(viewsets.ModelViewSet):
     serializer_class = CandidateSerializer
     permission_classes = [permissions.IsAuthenticated]
-    queryset = Candidate.objects.none()          # required for router
+    queryset = Candidate.objects.none()         
 
     def get_queryset(self):
         user = self.request.user
         if hasattr(user, 'recruiter_profile'):
-            return Candidate.objects.all()
+            return Candidate.objects.filter(
+                job__posted_by = user.recruiter_profile,
+                deleted_at__isnull=True
+            ).select_related('user', 'job')
         elif hasattr(user, 'candidate_profile'):
             return Candidate.objects.filter(user=user)
         return Candidate.objects.none()
@@ -54,7 +57,7 @@ class ActivityLogViewSet(viewsets.ModelViewSet):
     serializer_class = ActivityLogSerializer
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ['get']
-    queryset = ActivityLog.objects.none()        # required for router
+    queryset = ActivityLog.objects.none()        
 
     def get_queryset(self):
         user = self.request.user
@@ -160,7 +163,7 @@ class CVUploadURLView(APIView):
         return Response({
             'upload_url': signed_url, 
             'file_key': file_key,
-            'content_type': content_type,  # Return this for frontend to use
+            'content_type': content_type,  
         })
 
 class CVUploadConfirmView(APIView):

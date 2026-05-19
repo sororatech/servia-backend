@@ -5,6 +5,7 @@ import boto3
 from django.conf import settings
 from botocore.config import Config
 from apps.job.serializers import JobSerializer
+from apps.job.serializers import JobBasicSerializer
 
 class UserBasicSerializer(serializers.ModelSerializer):
     """
@@ -20,6 +21,7 @@ class CandidateSerializer(serializers.ModelSerializer):
     Candidate serializer with signed download URLs for CV and video.
     """
     user = UserBasicSerializer(read_only=True)
+    job = JobBasicSerializer(read_only=True)
     cv_download_url = serializers.SerializerMethodField()
     video_download_url = serializers.SerializerMethodField()
     

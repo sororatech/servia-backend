@@ -16,14 +16,18 @@ class JobViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         queryset = Job.objects.annotate(
-            candidate_count=Count('candidate')
+            candidate_count=Count('candidate', filter=Q(candidate__deleted_at__isnull=True))
         ).select_related('posted_by__user').order_by('-created_at')
-        
+    
         if not hasattr(user, 'recruiter_profile'):
-            return queryset.filter(is_active=True, deleted_at__isnull=True)
-        
+            return queryset.filter(
+                is_active=True, 
+                deleted_at__isnull=True
+            )
+    
         return queryset.filter(
-            Q(posted_by__user__id=user.id) | Q(is_active=True, deleted_at__isnull=True)
+            posted_by=user.recruiter_profile,
+            deleted_at__isnull=True
         )
     
     def get_serializer_class(self):

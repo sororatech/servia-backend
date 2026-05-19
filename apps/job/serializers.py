@@ -5,6 +5,17 @@ from .models import Job
 from apps.users.serializers import RecruiterUserSerializer
 
 
+class JobBasicSerializer(serializers.ModelSerializer):
+    """
+    Minimal job serializer for nested display.
+    Only includes essential fields to avoid circular dependencies.
+    """
+    class Meta:
+        model = Job
+        fields = ['id', 'title', 'department', 'location']
+        read_only_fields = ['id']
+
+
 class JobSerializer(serializers.ModelSerializer):
     """Standard job serializer for list/retrieve"""
     candidate_count = serializers.IntegerField(read_only=True, default=0)
@@ -53,6 +64,7 @@ class JobCreateSerializer(serializers.ModelSerializer):
         model = Job
         fields = '__all__'
         read_only_fields = ['id', 'created_at', 'updated_at']
+    
     def validate_core_skills(self, value):
         """Validate that core_skills is a list of strings"""
         if not isinstance(value, list):
@@ -60,6 +72,7 @@ class JobCreateSerializer(serializers.ModelSerializer):
         if not all(isinstance(skill, str) for skill in value):
             raise serializers.ValidationError("Each skill must be a string")
         return value
+    
     def get_warning(self, obj):
         return self.context.get('warning', None)
     
@@ -99,7 +112,7 @@ class JobCreateSerializer(serializers.ModelSerializer):
         ).select_related('posted_by__user')
         
         for job in recent_jobs:
-            if self._is_duplicate_job(job, data):  # ← No recruiter_user argument
+            if self._is_duplicate_job(job, data):  
                 raise serializers.ValidationError({
                     'title': 'A job with this title and location already exists.',
                     'non_field_errors': [
