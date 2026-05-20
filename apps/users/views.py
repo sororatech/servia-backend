@@ -28,6 +28,7 @@ from apps.users.tasks import send_welcome_email, send_password_reset_email, send
 from rest_framework.throttling import UserRateThrottle
 from apps.candidate.models import Candidate
 from apps.interview.models import Interview
+from django.db.models import Count, Q, Avg
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -97,7 +98,7 @@ class CustomAuthToken(APIView):
         token, _ = Token.objects.get_or_create(user=user)
 
         response = Response({
-            'user_id': str(user.id),
+            'user_id': str(user.id), # String for frontend compatibility (UUID-like handling)
             'user_type': user_type,
             'token': token.key,
             'email': user.email,
@@ -152,7 +153,7 @@ class CandidateRegistrationView(APIView):
 
                 send_verification_email.delay(user.email, verification_code, user.first_name or user.email)
                 
-                logger.info(f"Verification code for {user.email}: {verification_code}")
+                logger.info(f"Verification code for {user.email}")
                 
                 send_welcome_email.delay(user.id)
 
@@ -205,7 +206,7 @@ class CandidateRegistrationView(APIView):
 
                                 send_verification_email.delay(user.email, verification_code, user.first_name or user.email)
 
-                                logger.info(f"Verification code for {user.email}: {verification_code}")
+                                logger.info(f"Verification code for {user.email}")
 
                                 send_welcome_email.delay(user.id)
 
@@ -436,7 +437,7 @@ class ResendVerificationView(APIView):
         
         send_verification_email.delay(email, code, user.first_name or email)
         
-        logger.info(f"Verification code for {email}: {code}")
+        logger.info(f"Verification code for {email}")
         
         return Response(
             {'message': 'Verification code sent'},
@@ -492,10 +493,6 @@ class UserProfileView(APIView):
   
 
 class RecruiterStatsView(APIView):
-    """
-    Get aggregated stats for recruiter dashboard.
-    Only returns data for THIS recruiter's jobs/candidates.
-    """
     permission_classes = [IsAuthenticated]
     
     def get(self, request):
@@ -506,22 +503,23 @@ class RecruiterStatsView(APIView):
             )
         
         recruiter = request.user.recruiter_profile
-        
-        total_candidates = Candidate.objects.filter(
-            job__posted_by=recruiter,
-            deleted_at__isnull=True
-        ).count()
-        
-        shortlisted = Candidate.objects.filter(
-            job__posted_by=recruiter,
-            status='shortlisted',
-            deleted_at__isnull=True
-        ).count()
-        
         now = timezone.now()
         start_of_week = now - timedelta(days=now.weekday() + 1)
         end_of_week = start_of_week + timedelta(days=6)
         
+        # Single query with annotations
+        from django.db.models import Count, Q, Avg
+        
+        stats = Candidate.objects.filter(
+            job__posted_by=recruiter,
+            deleted_at__isnull=True
+        ).aggregate(
+            total=Count('id'),
+            shortlisted=Count('id', filter=Q(status='shortlisted')),
+            avg_score=Avg('ai_score', filter=Q(ai_score__isnull=False))
+        )
+        
+        # Interviews query (separate since it's a different model)
         interviews_this_week = Interview.objects.filter(
             recruiter=recruiter,
             scheduled_time__gte=start_of_week,
@@ -529,17 +527,9 @@ class RecruiterStatsView(APIView):
             status__in=['scheduled', 'confirmed', 'in_progress']
         ).count()
         
-        from django.db.models import Avg
-        avg_score_result = Candidate.objects.filter(
-            job__posted_by=recruiter,
-            ai_score__isnull=False,
-            deleted_at__isnull=True
-        ).aggregate(avg=Avg('ai_score'))
-        avg_ai_score = round(avg_score_result['avg'], 1) if avg_score_result['avg'] else None
-        
         return Response({
-            'totalCandidates': total_candidates,
-            'shortlisted': shortlisted,
+            'totalCandidates': stats['total'],
+            'shortlisted': stats['shortlisted'],
             'interviewsThisWeek': interviews_this_week,
-            'avgAiScore': avg_ai_score,
+            'avgAiScore': round(stats['avg_score'], 1) if stats['avg_score'] else None,
         }, status=status.HTTP_200_OK)

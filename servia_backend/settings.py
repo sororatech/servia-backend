@@ -188,7 +188,8 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.UserRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'login': '5/min',  
+        'login': '10/min', 
+        'login_hourly': '30/hour',
         'user': '1000/day',
     },
 }

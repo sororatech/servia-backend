@@ -290,10 +290,10 @@ def cleanup_unverified_users():
     except Exception as e:
         logger.error(f"Failed to cleanup unverified users: {str(e)}")
         return 0
-
-@shared_task
-def send_verification_email(user_email, verification_code, user_name=""):
-    """Send verification code email."""
+    
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def send_verification_email(self, user_email, verification_code, user_name=""):
+    """Send verification code email with retry logic."""
     try:
         context = {
             'user_name': user_name,
@@ -310,4 +310,7 @@ def send_verification_email(user_email, verification_code, user_name=""):
         )
         logger.info(f"Verification email sent to {user_email}")
     except Exception as e:
-        logger.error(f"Failed to send verification email to {user_email}: {str(e)}")
+        # Log full traceback for debugging
+        logger.error(f"Failed to send verification email to {user_email}: {str(e)}", exc_info=True)
+        # Retry with exponential backoff: 60s, 120s, 240s
+        raise self.retry(exc=e, countdown=60 * (2 ** self.request.retries))
