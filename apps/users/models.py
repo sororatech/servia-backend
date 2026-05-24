@@ -12,6 +12,7 @@ class CandidateUser(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='candidate_profile')
     phone = models.CharField(max_length=20, blank=True, null=True)
+    location = models.CharField(max_length=200, blank=True, null=True)
     nationality = models.CharField(max_length=100, blank=True, null=True)
     profile_photo = models.CharField(max_length=500, blank=True, null=True)  # Cloudflare R2 URL
     created_at = models.DateTimeField(auto_now_add=True)
@@ -36,6 +37,9 @@ class RecruiterUser(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='recruiter_profile')
     department = models.CharField(max_length=100, blank=True, null=True)
+    phone = models.CharField(max_length=20, blank=True, null=True)
+    location = models.CharField(max_length=200, blank=True, null=True)
+    profile_photo = models.CharField(max_length=500, blank=True, null=True)  # Cloudflare R2 URL
     role = models.CharField(max_length=20, choices=Role.choices, default=Role.RECRUITER)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)

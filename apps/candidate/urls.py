@@ -12,5 +12,7 @@ urlpatterns = [
     path('candidates/<uuid:candidate_id>/upload-cv/', views.CVUploadURLView.as_view(), name='upload-cv-url'),
     path('candidates/<uuid:candidate_id>/confirm-cv/', views.CVUploadConfirmView.as_view(), name='confirm-cv'),
     path('candidates/<uuid:candidate_id>/upload-video/', views.VideoUploadView.as_view(), name='upload-video'),
+    path('bulk-update-status/', views.bulk_update_status, name='bulk-update-status'),
+    path('candidates/<uuid:candidate_id>/cv-preview/', views.CVPreviewURLView.as_view(), name='cv-preview'),
     path('', include(router.urls)),
 ]

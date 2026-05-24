@@ -119,6 +119,15 @@ class Job(models.Model):
         SEASONAL = 'seasonal', 'Seasonal'
         INTERNSHIP = 'internship', 'Internship'
         APPRENTICESHIP = 'apprenticeship', 'Apprenticeship'
+    
+    class EducationLevel(models.TextChoices):
+        NONE = 'none', 'No formal education required'
+        HIGH_SCHOOL = 'high_school', 'High School / Secondary'
+        VOCATIONAL = 'vocational', 'Vocational / Trade Certificate'
+        DIPLOMA = 'diploma', 'Diploma (Hospitality / Hotel Management)'
+        BACHELOR = 'bachelor', 'Bachelor\'s Degree (Hospitality / Business)'
+        MASTER = 'master', 'Master\'s Degree (MBA / Hospitality Management)'
+        PROFESSIONAL_CERT = 'professional_cert', 'Professional Certification (e.g., CHA, CHT)'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=200, db_index=True)
@@ -183,6 +192,21 @@ class Job(models.Model):
     is_active = models.BooleanField(default=True, db_index=True)
     posted_by = models.ForeignKey(RecruiterUser, on_delete=models.SET_NULL, null=True, blank=True, db_index=True)
     deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    application_deadline = models.DateTimeField(
+        null=True, 
+        blank=True, 
+        db_index=True,
+        help_text="Last date candidates can apply. Leave blank for open-ended roles."
+    )
+    education_level = models.CharField(
+        max_length=20,
+        choices=EducationLevel.choices,
+        default=EducationLevel.NONE,
+        db_index=True,
+        help_text="Minimum education level required for this job"
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
