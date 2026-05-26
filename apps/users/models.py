@@ -46,3 +46,9 @@ class RecruiterUser(models.Model):
 
     def __str__(self):
         return self.user.get_full_name() or self.user.username
+
+
+class SystemMetric(models.Model):
+    key = models.CharField(max_length=100, unique=True)
+    value = models.IntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)

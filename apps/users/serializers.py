@@ -66,6 +66,16 @@ class RecruiterUserSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
     def create(self, validated_data):
+    # 🔍 DEBUG: Print what we actually received
+        print(f"\n🔍 DEBUG RecruiterUserSerializer.create():")
+        print(f"   validated_data keys: {list(validated_data.keys())}")
+        print(f"   'user' in validated_data: {'user' in validated_data}")
+        if 'user' in validated_data:
+            print(f"   user_data type: {type(validated_data['user'])}")
+            print(f"   user_data: {validated_data['user']}")
+            print(f"   department: {validated_data.get('department')}")
+            print(f"   role: {validated_data.get('role')}\n")
+    
         user_data = validated_data.pop('user')
         user_serializer = UserRegistrationSerializer(data=user_data)
         user_serializer.is_valid(raise_exception=True)

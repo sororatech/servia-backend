@@ -18,11 +18,12 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings  
-from .views import home, health, trigger_test_error
+from .views import home, health, trigger_test_error, SystemHealthDashboard
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 urlpatterns = [
     path('health/', health),
+    path('system-health/', SystemHealthDashboard.as_view(), name='system-health'),
     path('admin/', admin.site.urls),
     path('users/', include('apps.users.urls')),
     path('jobs/', include('apps.job.urls')),

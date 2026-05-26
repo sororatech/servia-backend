@@ -459,6 +459,7 @@ class UserProfileView(APIView):
             'last_name': user.last_name,
             'user_type': user_type,
             'profile_photo': getattr(profile, 'profile_photo', None),
+            'is_superuser': user.is_superuser,
         }
         
         return Response(response_data)

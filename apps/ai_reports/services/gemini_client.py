@@ -5,6 +5,7 @@ import time
 import logging
 import google.generativeai as genai
 from dotenv import load_dotenv
+from django.core.cache import cache 
 
 logger = logging.getLogger(__name__)
 
@@ -306,6 +307,7 @@ def generate_follow_up_questions(candidate_text: str, context: list) -> list:
         )
         questions = _extract_questions_from_text(getattr(response, "text", ""))
         if len(questions) >= 3:
+            _track_gemini_api_call()
             return questions[:3]
         raise GeminiResponseError("Gemini returned fewer than 3 follow-up questions.")
     except Exception as e:
@@ -350,6 +352,7 @@ def analyze_interview(transcripts: list) -> dict:
             result = extract_json_object(response.text.strip())
             logger.info(f"Interview analysis complete — score: {result.get('fit_score')}, "
                         f"recommendation: {result.get('recommendation')}")
+            _track_gemini_api_call()
             return result
         except Exception as e:
             last_error = str(e)
@@ -380,7 +383,9 @@ def analyze_cv(cv_text: str, job_description: str, max_retries: int = 3) -> dict
         try:
             logger.info(f"Gemini API attempt {attempt + 1}/{max_retries} (model: {PRIMARY_MODEL})")
             result = _call_model(primary_model, prompt)
+            
             logger.info(f"Gemini response received — fit_score: {result['fit_score']}")
+            _track_gemini_api_call()
             return result
 
         except (json.JSONDecodeError, GeminiResponseError) as e:
@@ -413,3 +418,11 @@ def analyze_cv(cv_text: str, job_description: str, max_retries: int = 3) -> dict
     raise GeminiResponseError(
         f"Gemini API failed after {max_retries} attempts. Last error: {last_error}"
     )
+
+def _track_gemini_api_call():
+    from django.db.models import F
+    from django.utils import timezone
+    from apps.users.models import SystemMetric
+    key = f"gemini_usage_{timezone.now().strftime('%Y-%m')}"
+    if not SystemMetric.objects.filter(key=key).update(value=F('value') + 1):
+        SystemMetric.objects.create(key=key, value=1)
