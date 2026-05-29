@@ -232,9 +232,6 @@ class CVUploadConfirmView(APIView):
             candidate.cv_status = 'processing'
             candidate.save()
 
-# added
-
-            print(f"📤 [DEBUG] Queuing analyze_cv_task for candidate {candidate.id}")
             
             from apps.ai_reports.tasks import analyze_cv_task
             task = analyze_cv_task.delay(
@@ -242,9 +239,8 @@ class CVUploadConfirmView(APIView):
                 cv_text=extracted_text,  # Already extracted above
                 job_description=candidate.job.description if candidate.job else ""
             )
-            print(f"📤 [DEBUG] Task queued! ID: {task.id}")
 
-#added
+
             os.unlink(tmp_path)
 
 

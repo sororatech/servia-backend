@@ -33,8 +33,6 @@ urlpatterns = [
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
 ]
-
-# ONLY add dev-only endpoints when DEBUG=True
 if settings.DEBUG:
     urlpatterns += [
         path('sentry-debug/', trigger_test_error, name='sentry-debug'),

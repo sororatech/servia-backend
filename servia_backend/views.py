@@ -1,20 +1,5 @@
 from django.http import HttpResponse
 from django.conf import settings
-
-def home(request):
-    return HttpResponse("Hello Servia AI")
-
-def trigger_test_error(request):
-    """Test endpoint for Sentry verification - REMOVE AFTER TESTING"""
-    if settings.DEBUG: 
-        raise Exception("Test error from ServiaAI - Sentry verification")
-    return HttpResponse("Not available in production", status=403)
-def health(request):
-    return HttpResponse("ok")
-    
-
-
-
 import os
 import requests
 from django.utils import timezone
@@ -26,6 +11,17 @@ from rest_framework.permissions import IsAuthenticated
 from datetime import datetime
 from django.db.models import Sum
 from apps.users.models import SystemMetric
+
+def home(request):
+    return HttpResponse("Hello Servia AI")
+
+def trigger_test_error(request):
+    """Test endpoint for Sentry verification - REMOVE AFTER TESTING"""
+    if settings.DEBUG: 
+        raise Exception("Test error from ServiaAI - Sentry verification")
+    return HttpResponse("Not available in production", status=403)
+def health(request):
+    return HttpResponse("ok")
 
 class SystemHealthDashboard(APIView):
     """
@@ -51,10 +47,8 @@ class SystemHealthDashboard(APIView):
 
         try:
             res = requests.get(issues_url, headers=headers, params=params, timeout=10)
-            print(f"📡 Sentry API Status: {res.status_code}")
             if res.status_code == 200:
                 issues = res.json()
-                print(f"✅ Sentry API Success: Found {len(issues)} issues")
                 error_count = sum([int(issue.get('count', 0) or 0) for issue in issues])
                 recent_errors = [
                     {
@@ -69,11 +63,9 @@ class SystemHealthDashboard(APIView):
                     for issue in issues[:5]
                 ]
         except Exception as e:
-            print(f"⚠️ Sentry API error: {e}")
             import traceback
             traceback.print_exc()
 
-        # 2. Service Health
         services = {}
         try:
             connection.ensure_connection()
@@ -87,7 +79,6 @@ class SystemHealthDashboard(APIView):
         except Exception as e:
             services['cache'] = 'error'
 
-        # 3. REAL API Usage (Database)
         now = timezone.now()
         month_key = f"gemini_usage_{now.strftime('%Y-%m')}"
         current_usage = (SystemMetric.objects.filter(key=month_key).values_list('value', flat=True).first() or 0)
@@ -95,18 +86,15 @@ class SystemHealthDashboard(APIView):
         percentage = (current_usage / monthly_limit * 100) if monthly_limit > 0 else 0
         resets_on = now.replace(year=now.year + 1, month=1, day=1) if now.month == 12 else now.replace(month=now.month + 1, day=1)
 
-        # 4. REAL Uptime (Database)
         ok = SystemMetric.objects.filter(key__startswith='health_ok_').aggregate(Sum('value'))['value__sum'] or 0
         fail = SystemMetric.objects.filter(key__startswith='health_fail_').aggregate(Sum('value'))['value__sum'] or 0
         total_checks = ok + fail
         uptime_percentage = round((ok / total_checks * 100), 2) if total_checks > 0 else 99.98
 
-        # 5. Overall Status
         system_status = 'healthy'
         if error_count > 50 or any(v == 'error' for v in services.values()):
             system_status = 'degraded'
 
-        # 6. Return Response (NO calculations inside here!)
         return Response({
             'status': system_status,
             'error_count_24h': error_count,
