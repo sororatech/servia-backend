@@ -4,6 +4,10 @@ from celery import shared_task
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.conf import settings
+from django.utils import timezone
+from django.db.models import F
+import requests, time
+from .models import SystemMetric
 
 logger = logging.getLogger(__name__)
 
@@ -290,3 +294,24 @@ def cleanup_unverified_users():
     except Exception as e:
         logger.error(f"Failed to cleanup unverified users: {str(e)}")
         return 0
+
+
+@shared_task
+def check_system_health():
+    key_date = timezone.now().strftime('%Y-%m-%d')
+    
+    health_url = os.getenv('HEALTH_CHECK_URL', 'http://localhost:8000/health/')
+    
+    try:
+        start = time.time()
+        r = requests.get(health_url, timeout=10)  
+        key = f"health_ok_{key_date}" if r.status_code == 200 else f"health_fail_{key_date}"
+        if not SystemMetric.objects.filter(key=key).update(value=F('value') + 1):
+            SystemMetric.objects.create(key=key, value=1)
+        logger.info(f"✓ Health check logged: {key}")  
+    except Exception as e:
+        key = f"health_fail_{key_date}"
+        if not SystemMetric.objects.filter(key=key).update(value=F('value') + 1):
+            SystemMetric.objects.create(key=key, value=1)
+        logger.error(f"✗ Health check failed: {e}")  
+ 

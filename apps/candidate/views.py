@@ -41,7 +41,7 @@ def _check_upload_permission(candidate, user):
 class CandidateViewSet(viewsets.ModelViewSet):
     serializer_class = CandidateSerializer
     permission_classes = [permissions.IsAuthenticated]
-    queryset = Candidate.objects.none()
+    queryset = Candidate.objects.none()        
 
     def get_queryset(self):
         user = self.request.user
@@ -58,7 +58,6 @@ class CandidateViewSet(viewsets.ModelViewSet):
         user = request.user
         job_id = request.data.get('job')
 
-        # Only check duplicates for authenticated candidates
         if hasattr(user, 'candidate_profile') and job_id:
             try:
                 job = Job.objects.get(id=job_id)
@@ -75,7 +74,6 @@ class CandidateViewSet(viewsets.ModelViewSet):
 
             existing = Candidate.objects.filter(user=user, job=job, deleted_at__isnull=True).exclude(status=Candidate.Status.WITHDRAWN).first()
             if existing:
-                # Gracefully return existing application instead of creating duplicate
                 serializer = self.get_serializer(existing)
                 return Response({
                     'id': serializer.data['id'],
@@ -84,7 +82,6 @@ class CandidateViewSet(viewsets.ModelViewSet):
                     'status': existing.status
                 }, status=status.HTTP_200_OK)
 
-        # Proceed with normal creation if no duplicate found
         return super().create(request, *args, **kwargs)
 
     def perform_create(self, serializer):
@@ -99,7 +96,6 @@ class CandidateViewSet(viewsets.ModelViewSet):
         user = request.user
         new_status = request.data.get('status')
 
-        # Allow candidate to withdraw their own application
         if new_status == Candidate.Status.WITHDRAWN and hasattr(user, 'candidate_profile') and instance.user == user:
             pass
         elif not hasattr(user, 'recruiter_profile'):
@@ -114,12 +110,10 @@ class CandidateViewSet(viewsets.ModelViewSet):
 
         new_status = instance.status
 
-        # Send email notification if status changed
         if old_status != new_status:
             from apps.candidate.services.email_notifications import send_status_email
             send_status_email(instance, new_status, old_status)
 
-            # Create ActivityLog for the status change
             from apps.candidate.models import ActivityLog
             ActivityLog.objects.create(
                 candidate=instance,
@@ -147,7 +141,7 @@ class ActivityLogViewSet(viewsets.ModelViewSet):
     serializer_class = ActivityLogSerializer
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ['get']
-    queryset = ActivityLog.objects.none()        # required for router
+    queryset = ActivityLog.objects.none()      
 
     def get_queryset(self):
         user = self.request.user
@@ -176,14 +170,12 @@ class VideoUploadView(APIView):
         
         if candidate.video_attempts >= 5:
             if candidate.video_last_failed_attempt and candidate.video_last_failed_attempt > one_hour_ago:
-                # Still in cooldown
                 wait_minutes = 60 - ((timezone.now() - candidate.video_last_failed_attempt).seconds // 60)
                 return Response(
                     {'error': f'Too many failed attempts. Please try again in {wait_minutes} minutes.'},
                     status=status.HTTP_429_TOO_MANY_REQUESTS
                 )
             else:
-                # Cooldown period passed, reset attempts
                 candidate.video_attempts = 0
                 candidate.video_last_failed_attempt = None
                 candidate.save(update_fields=['video_attempts', 'video_last_failed_attempt'])
@@ -191,8 +183,7 @@ class VideoUploadView(APIView):
         upload_success = True  
         
         if upload_success:
-            # Success: store video info and reset attempts
-            candidate.video_intro_url = "https://stream.example.com/video-id"  # Replace with actual URL
+            candidate.video_intro_url = "https://stream.example.com/video-id"  
             candidate.video_uploaded_at = timezone.now()
             candidate.video_attempts = 0
             candidate.video_last_failed_attempt = None
@@ -248,6 +239,19 @@ class CVUploadURLView(APIView):
         content_type = content_type_map.get(file_extension)
 
         file_key = f'cv/{candidate_id}/{uuid.uuid4()}.{file_extension}'
+        
+        signed_url = generate_signed_url(
+            file_key, 
+            method='put_object', 
+            expires_in=900,  
+            content_type=content_type 
+        )
+        
+        return Response({
+            'upload_url': signed_url, 
+            'file_key': file_key,
+            'content_type': content_type,  
+        })
         file_size = request.data.get('file_size', 0)
         max_size = getattr(settings, 'MAX_CV_SIZE_MB', 10) * 1024 * 1024
 
@@ -259,7 +263,7 @@ class CVUploadURLView(APIView):
         signed_url = generate_signed_url(
             file_key,
             method='put_object',
-            expires_in=900,          # 15 minutes
+            expires_in=900,          
             content_type=content_type
         )
         return Response({
@@ -274,6 +278,9 @@ class CVUploadConfirmView(APIView):
         import tempfile
         import requests
         import os
+        import magic  
+        
+        candidate = Candidate.objects.get(id=candidate_id)
         import magic
         try:
             candidate = Candidate.objects.select_related('user', 'job__posted_by').get(id=candidate_id)
@@ -289,18 +296,109 @@ class CVUploadConfirmView(APIView):
         if not file_key:
             return Response({'error': 'file_key required'}, status=400)
 
-        # Prevent duplicate confirmation
+        download_url = generate_signed_url(file_key, method='get_object', expires_in=300)
+        response = requests.get(download_url)
+        
+        file_ext = filename.split('.')[-1].lower()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_ext}') as tmp:
+            tmp.write(response.content)
+            tmp_path = tmp.name
+        
+        try:
+            mime = magic.from_file(tmp_path, mime=True)
+            
+            ALLOWED_MIMES = {
+                'pdf': 'application/pdf',
+                'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'doc': 'application/msword',
+                'png': 'image/png',
+                'jpg': 'image/jpeg',
+                'jpeg': 'image/jpeg',
+            }
+            
+            expected_mime = ALLOWED_MIMES.get(file_ext)
+            if not expected_mime:
+                os.unlink(tmp_path)
+                return Response(
+                    {'error': f'File extension .{file_ext} not supported'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            if mime != expected_mime:
+                os.unlink(tmp_path)
+                return Response(
+                    {'error': f'File content does not match extension. Expected {expected_mime}, got {mime}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            from apps.candidate.services.text_extraction import extract_cv_text
+            extracted_text = extract_cv_text(tmp_path, file_ext)
+            
+            if not extracted_text:
+                candidate.cv_status = 'error'
+                candidate.save()
+                os.unlink(tmp_path)
+                return Response(
+                    {'error': 'Could not extract text from CV. Please upload a text-based PDF or DOCX.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            candidate.cv_file = file_key
+            candidate.cv_filename = filename
+            candidate.cv_uploaded_at = timezone.now()
+            candidate.cv_text = extracted_text
+            candidate.cv_status = 'processing'
+            candidate.save()
+
+            ActivityLog.objects.create(
+                candidate=candidate,
+                event_type=ActivityLog.EventType.CV_UPLOADED, 
+                note=f"CV uploaded: {filename}",
+                created_by_type=ActivityLog.CreatedByType.CANDIDATE,
+                created_by_id=request.user.id 
+)
+
+            
+            from apps.ai_reports.tasks import analyze_cv_task
+            task = analyze_cv_task.delay(
+                candidate_id=str(candidate.id),
+                cv_text=extracted_text, 
+                job_description=candidate.job.description if candidate.job else ""
+            )
+
+
+            os.unlink(tmp_path)
+
+
+        except magic.MagicException:
+            os.unlink(tmp_path)
+            return Response(
+                {'error': 'Could not validate file format'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            candidate.cv_status = 'error'
+            candidate.save()
+            if 'tmp_path' in locals():
+                os.unlink(tmp_path)
+         
+            logger.error(f"CV upload error for candidate {candidate_id}: {str(e)}")
+            return Response(
+                {'error': 'Server error during CV processing'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        return Response({'status': 'CV uploaded successfully', 'cv_status': 'processing'})
+        
         if candidate.cv_file == file_key:
             return Response({'error': 'This CV has already been confirmed.'}, status=400)
 
-        # Store file reference (text not yet extracted)
         candidate.cv_file = file_key
         candidate.cv_filename = client_filename
         candidate.cv_uploaded_at = timezone.now()
         candidate.save(update_fields=['cv_file', 'cv_filename', 'cv_uploaded_at'])
 
         try:
-            # 1. Download the file from R2
             download_url = generate_signed_url(file_key, method='get_object', expires_in=300)
             logger.info(f"Downloading CV from {download_url}")
             resp = requests.get(download_url, timeout=30)
@@ -309,14 +407,11 @@ class CVUploadConfirmView(APIView):
                 candidate.save(update_fields=['cv_status'])
                 return Response({'error': f'Failed to download CV (HTTP {resp.status_code})'}, status=400)
 
-            # 2. Save to temporary file for MIME detection & extraction
-            # Use a safe extension from the file_key (not from client)
             ext = file_key.split('.')[-1].lower()
             with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as tmp:
                 tmp.write(resp.content)
                 tmp_path = tmp.name
 
-            # 3. Validate MIME type (magic bytes)
             mime = magic.from_file(tmp_path, mime=True)
             logger.info(f"Detected MIME type: {mime}")
 
@@ -336,12 +431,10 @@ class CVUploadConfirmView(APIView):
                     status=400
                 )
 
-            # Optional: Warn if extension mismatches actual MIME
             detected_ext = ALLOWED_MIMES[mime]
             if detected_ext != ext:
                 logger.warning(f"MIME extension mismatch: file_key says {ext}, but content is {detected_ext}")
 
-            # 4. Extract text using the detected extension
             from apps.candidate.services.text_extraction import extract_cv_text
             extracted_text = extract_cv_text(tmp_path, detected_ext)
             os.unlink(tmp_path)
@@ -354,11 +447,9 @@ class CVUploadConfirmView(APIView):
                     status=400
                 )
 
-            # 5. Store extracted text
             candidate.cv_text = extracted_text
             candidate.save(update_fields=['cv_text'])
 
-            # 6. QUEUE AI ANALYSIS (BEFORE setting cv_status)
             job = candidate.job
             core_skills_list = job.core_skills if job.core_skills else []
             core_skills_str = ", ".join(core_skills_list) if core_skills_list else "None specified"
@@ -373,14 +464,12 @@ class CVUploadConfirmView(APIView):
             from apps.ai_reports.tasks import analyze_cv_task
             analyze_cv_task.delay(str(candidate.id), extracted_text, job_description, core_skills_list, education_level_display)
 
-            # 7. Mark as processing
             candidate.cv_status = Candidate.CVStatus.PROCESSING
             candidate.save(update_fields=['cv_status'])
 
-            # 8. Create activity log
             ActivityLog.objects.create(
                 candidate=candidate,
-                event_type=ActivityLog.EventType.AI_ANALYSIS_QUEUED,  # ensure this choice exists
+                event_type=ActivityLog.EventType.AI_ANALYSIS_QUEUED, 
                 note="AI analysis queued",
                 created_by_type=ActivityLog.CreatedByType.CANDIDATE,
                 created_by_id=None,
@@ -414,7 +503,6 @@ class CVPreviewURLView(APIView):
         if not candidate.cv_file:
             return Response({'error': 'No CV uploaded'}, status=404)
         
-        # Generate inline URL
         url = generate_signed_url(
             candidate.cv_file,
             method='get_object',
@@ -433,7 +521,7 @@ class MyApplicationsViewSet(viewsets.ModelViewSet):
     http_method_names = ['get', 'head', 'options']
     def get_queryset(self):
         user = self.request.user
-        # Only candidates can access their applications
+     
         if hasattr(user, 'candidate_profile'):
             return Candidate.objects.filter(
                 user=user,
@@ -458,7 +546,6 @@ class MyApplicationsStatsViewSet(viewsets.ViewSet):
     def list(self, request):
         user = request.user
         
-        # Only candidates can access their stats
         if not hasattr(user, 'candidate_profile'):
             return Response({
                 'total_applications': 0,
@@ -530,11 +617,9 @@ def bulk_update_status(request):
     if not candidate_ids or not new_status:
         return Response({'error': 'candidate_ids and status are required.'}, status=400)
     
-    # Validate status is a valid choice
     if new_status not in Candidate.Status.values:
         return Response({'error': f'Invalid status. Choices: {Candidate.Status.values}'}, status=400)
     
-    # Scope to recruiter's candidates only
     candidates = Candidate.objects.filter(
         id__in=candidate_ids,
         job__posted_by=request.user.recruiter_profile,
@@ -556,7 +641,6 @@ def bulk_update_status(request):
         candidate.status = new_status
         candidate.save(update_fields=['status', 'updated_at'])
         
-        # Send email notification
         from apps.candidate.services.email_notifications import send_status_email
         send_status_email(candidate, new_status, old_status)  
 

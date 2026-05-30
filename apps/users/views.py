@@ -472,6 +472,7 @@ class UserProfileDetailView(APIView):
             'department': getattr(profile, 'department', None),
             'is_admin': profile.role == RecruiterUser.Role.ADMIN if hasattr(user, 'recruiter_profile') else False,
             'profile_photo': getattr(profile, 'profile_photo', None),
+            'is_superuser': user.is_superuser,
             'date_joined': user.date_joined,
         }
         avatar_url = None
@@ -487,7 +488,6 @@ class UserProfileDetailView(APIView):
         user = request.user
         data = request.data
 
-        # Validate email uniqueness and format
         if 'email' in data and data['email'] != user.email:
             if User.objects.filter(email=data['email']).exclude(id=user.id).exists():
                 return Response({'error': 'A user with this email already exists.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -496,24 +496,20 @@ class UserProfileDetailView(APIView):
             except ValidationError:
                 return Response({'error': 'Invalid email format.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Validate phone format (allow digits, spaces, +, -, parentheses)
         if 'phone' in data and data['phone']:
             phone_regex = r'^[\+\d\s\-\(\)]{8,20}$'
             if not re.match(phone_regex, data['phone']):
                 return Response({'error': 'Invalid phone number format. Use international format (e.g., +251911223344).'}, status=400)
 
-        # Validate location (if provided, must be >= 2 chars)
         if 'location' in data and data['location'] and len(data['location'].strip()) < 2:
             return Response({'error': 'Location must be at least 2 characters.'}, status=400)
 
-        # Update User fields
         user_fields = ['first_name', 'last_name', 'email']
         for field in user_fields:
             if field in data:
                 setattr(user, field, data[field])
         user.save()
 
-        # Update profile fields
         if hasattr(user, 'candidate_profile'):
             profile = user.candidate_profile
             profile_fields = ['phone', 'location', 'nationality']
@@ -602,7 +598,6 @@ class AvatarUploadConfirmView(APIView):
             return Response({'error': 'file_key required'}, status=400)
 
         user = request.user
-        # Determine which profile model to update
         if hasattr(user, 'candidate_profile'):
             profile = user.candidate_profile
         elif hasattr(user, 'recruiter_profile'):
@@ -625,7 +620,6 @@ class RecruiterStatsView(APIView):
         recruiter = user.recruiter_profile
         now = timezone.now()
 
-        # Jobs posted by this recruiter (active, not deleted, deadline not passed or null)
         jobs = Job.objects.filter(
             posted_by=recruiter,
             is_active=True,
@@ -634,11 +628,9 @@ class RecruiterStatsView(APIView):
 
         total_jobs = jobs.count()
 
-        # Candidates who applied to those jobs
         candidates = Candidate.objects.filter(job__in=jobs, deleted_at__isnull=True)
         total_candidates = candidates.count()
 
-        # Pending review: status 'applied' or 'screened'
         pending_review = candidates.filter(status__in=['applied', 'screened']).count()
 
         return Response({

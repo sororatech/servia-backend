@@ -50,3 +50,14 @@ class RecruiterUser(models.Model):
 
     def __str__(self):
         return self.user.get_full_name() or self.user.username
+
+
+class SystemMetric(models.Model):
+    key = models.CharField(max_length=100, unique=True, db_index=True)
+    value = models.IntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True, db_index=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['key', '-updated_at']),
+        ]

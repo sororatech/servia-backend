@@ -133,14 +133,14 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 SENTRY_DSN = os.getenv('SENTRY_DSN', '')
 
-if SENTRY_DSN and not DEBUG:
+if SENTRY_DSN:  
     sentry_sdk.init(
         dsn=SENTRY_DSN,
         integrations=[DjangoIntegration()],
         send_default_pii=False,
-        traces_sample_rate=1.0 if DEBUG else 0.1,
-        environment='production' if not DEBUG else 'development',
-        before_send=lambda event, hint: _filter_event(event, hint), 
+        traces_sample_rate=1.0,
+        environment='development',
+        before_send=lambda event, hint: _filter_event(event, hint),
     )
 def _filter_event(event, hint):
     """Strip any remaining PII from Sentry events 
@@ -244,3 +244,13 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Africa/Nairobi'
 CELERY_RESULT_BACKEND = 'django-db'
+
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": os.getenv("REDIS_URL", "redis://redis:6379/0"),
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        }
+    }
+}
