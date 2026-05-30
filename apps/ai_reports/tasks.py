@@ -19,7 +19,7 @@ from apps.ai_reports.services.gemini_client import (
 
 
 @shared_task(bind=True, max_retries=3)
-def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str):
+def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str, core_skills: list, education_level: str = None) -> dict:
     """
     Background Celery task to analyze a candidate CV using Gemini Flash.
     """
@@ -28,7 +28,8 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str)
 
         candidate = Candidate.objects.filter(id=candidate_id).first()
         if not candidate:
-            raise ObjectDoesNotExist(f"Candidate {candidate_id} does not exist.")
+            logger.error(f"Candidate {candidate_id} not found for CV analysis")
+            return {'candidate_id': candidate_id, 'status': 'failed', 'reason': 'candidate_not_found'}
 
         if AIReport.objects.filter(
             candidate=candidate,
@@ -44,7 +45,9 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str)
 
         result = analyze_cv(
             cv_text=cv_text,
-            job_description=job_description
+            job_description=job_description,
+            core_skills= core_skills,
+            education_level=education_level
         )
 
         self.update_state(
@@ -72,6 +75,8 @@ def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str)
                 weaknesses=vd['weaknesses'],
                 feedback=vd['feedback'],
                 extracted_skills=vd.get('extracted_skills') or [],
+                skills_match_details=vd.get('skills_match_details'),
+                education_match=vd.get('education_match'),
             )
 
             fit_score = serializer.validated_data['fit_score']

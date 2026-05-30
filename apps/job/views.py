@@ -117,17 +117,3 @@ def department_categories(request):
     }
     
     return Response(formatted)
-
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def department_categories(request):
-    """Return departments grouped by category for frontend dropdowns."""
-    categories = Job.Department.get_department_categories()
-    formatted = {
-        category: [
-            {'value': dept.value, 'label': dept.label}
-            for dept in depts
-        ]
-        for category, depts in categories.items()
-    }
-    return Response(formatted)

@@ -5,6 +5,7 @@ import os
 import platform
 import logging
 import tempfile
+import textract
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -125,6 +126,14 @@ def extract_text_from_scanned_pdf(file_path):
         logger.error(f"Scanned PDF OCR failed: {e}")
         return ""
 
+def extract_text_from_doc(file_path):
+    """Extract text from .doc file using textract."""
+    try:
+        text = textract.process(file_path).decode('utf-8')
+        return text.strip()
+    except Exception as e:
+        logger.error(f"textract failed for .doc file {file_path}: {e}")
+        return ""
 
 def extract_text_from_image(file_path):
     """Extract text from image using Tesseract OCR."""
@@ -195,5 +204,10 @@ def extract_cv_text(file_path, file_extension):
         except Exception as e:
             logger.error(f"DOCX extraction failed: {e}")
         return ""
-    
+    elif file_extension == 'doc':
+        text = extract_text_from_doc(file_path)
+        if text:
+            logger.info(f"DOC text extracted via textract: {len(text)} chars")
+            return text
+        return ""
     return ""
