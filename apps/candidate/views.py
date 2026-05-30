@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class CandidateViewSet(viewsets.ModelViewSet):
     serializer_class = CandidateSerializer
     permission_classes = [permissions.IsAuthenticated]
-    queryset = Candidate.objects.none()          # required for router
+    queryset = Candidate.objects.none()        
 
     def get_queryset(self):
         user = self.request.user
@@ -54,7 +54,7 @@ class ActivityLogViewSet(viewsets.ModelViewSet):
     serializer_class = ActivityLogSerializer
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ['get']
-    queryset = ActivityLog.objects.none()        # required for router
+    queryset = ActivityLog.objects.none()      
 
     def get_queryset(self):
         user = self.request.user
@@ -83,14 +83,12 @@ class VideoUploadView(APIView):
         
         if candidate.video_attempts >= 5:
             if candidate.video_last_failed_attempt and candidate.video_last_failed_attempt > one_hour_ago:
-                # Still in cooldown
                 wait_minutes = 60 - ((timezone.now() - candidate.video_last_failed_attempt).seconds // 60)
                 return Response(
                     {'error': f'Too many failed attempts. Please try again in {wait_minutes} minutes.'},
                     status=status.HTTP_429_TOO_MANY_REQUESTS
                 )
             else:
-                # Cooldown period passed, reset attempts
                 candidate.video_attempts = 0
                 candidate.video_last_failed_attempt = None
                 candidate.save(update_fields=['video_attempts', 'video_last_failed_attempt'])
@@ -98,8 +96,7 @@ class VideoUploadView(APIView):
         upload_success = True  
         
         if upload_success:
-            # Success: store video info and reset attempts
-            candidate.video_intro_url = "https://stream.example.com/video-id"  # Replace with actual URL
+            candidate.video_intro_url = "https://stream.example.com/video-id"  
             candidate.video_uploaded_at = timezone.now()
             candidate.video_attempts = 0
             candidate.video_last_failed_attempt = None
@@ -153,14 +150,14 @@ class CVUploadURLView(APIView):
         signed_url = generate_signed_url(
             file_key, 
             method='put_object', 
-            expires_in=900,  # 15 minutes
+            expires_in=900,  
             content_type=content_type 
         )
         
         return Response({
             'upload_url': signed_url, 
             'file_key': file_key,
-            'content_type': content_type,  # Return this for frontend to use
+            'content_type': content_type,  
         })
 
 class CVUploadConfirmView(APIView):
@@ -232,11 +229,19 @@ class CVUploadConfirmView(APIView):
             candidate.cv_status = 'processing'
             candidate.save()
 
+            ActivityLog.objects.create(
+                candidate=candidate,
+                event_type=ActivityLog.EventType.CV_UPLOADED, 
+                note=f"CV uploaded: {filename}",
+                created_by_type=ActivityLog.CreatedByType.CANDIDATE,
+                created_by_id=request.user.id 
+)
+
             
             from apps.ai_reports.tasks import analyze_cv_task
             task = analyze_cv_task.delay(
                 candidate_id=str(candidate.id),
-                cv_text=extracted_text,  # Already extracted above
+                cv_text=extracted_text, 
                 job_description=candidate.job.description if candidate.job else ""
             )
 
@@ -255,7 +260,7 @@ class CVUploadConfirmView(APIView):
             candidate.save()
             if 'tmp_path' in locals():
                 os.unlink(tmp_path)
-            # Log error for monitoring
+         
             logger.error(f"CV upload error for candidate {candidate_id}: {str(e)}")
             return Response(
                 {'error': 'Server error during CV processing'},
@@ -275,7 +280,7 @@ class MyApplicationsViewSet(viewsets.ModelViewSet):
     http_method_names = ['get', 'head', 'options']
     def get_queryset(self):
         user = self.request.user
-        # Only candidates can access their applications
+     
         if hasattr(user, 'candidate_profile'):
             return Candidate.objects.filter(
                 user=user,
@@ -300,7 +305,6 @@ class MyApplicationsStatsViewSet(viewsets.ViewSet):
     def list(self, request):
         user = request.user
         
-        # Only candidates can access their stats
         if not hasattr(user, 'candidate_profile'):
             return Response({
                 'total_applications': 0,
