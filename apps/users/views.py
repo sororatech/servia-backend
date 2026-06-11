@@ -151,7 +151,7 @@ class CandidateRegistrationView(APIView):
                 
                 verification_code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
                 cache.set(f'verify_email_{user.email}', verification_code, timeout=600)
-                
+
                 send_welcome_email.delay(user.id)
 
                 response = Response({
@@ -427,7 +427,7 @@ class ResendVerificationView(APIView):
         
         code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
         cache.set(f'verify_email_{email}', code, timeout=600)
-        
+
         return Response(
             {'message': 'Verification code sent'},
             status=status.HTTP_200_OK
