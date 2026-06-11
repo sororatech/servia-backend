@@ -290,7 +290,7 @@ class CVUploadConfirmView(APIView):
             return Response({'error': error_msg}, status=status.HTTP_403_FORBIDDEN)
 
         file_key = request.data.get('file_key')
-        client_filename = request.data.get('filename', '')  # ✅ Use consistent name
+        client_filename = request.data.get('filename', '')  
         
         if not file_key:
             return Response({'error': 'file_key required'}, status=400)
