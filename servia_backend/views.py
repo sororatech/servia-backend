@@ -40,8 +40,12 @@ class SystemHealthDashboard(APIView):
 
         headers = {'Authorization': f'Bearer {auth_token}'}
         issues_url = f"https://sentry.io/api/0/projects/{org}/{project}/issues/"
-        params = {'query': 'firstSeen:-24h', 'per_page': 100, 'sort': 'date'}
-
+        params = {
+            'query': '',                   
+            'per_page': 100,
+            'sort': 'date',                
+            'statsPeriod': '24h',          
+}
         error_count = 0
         recent_errors = []
 

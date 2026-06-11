@@ -5,7 +5,7 @@ import os
 import platform
 import logging
 import tempfile
-import textract
+# import textract
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -129,6 +129,7 @@ def extract_text_from_scanned_pdf(file_path):
 def extract_text_from_doc(file_path):
     """Extract text from .doc file using textract."""
     try:
+        import textract
         text = textract.process(file_path).decode('utf-8')
         return text.strip()
     except Exception as e:

@@ -278,209 +278,138 @@ class CVUploadConfirmView(APIView):
         import tempfile
         import requests
         import os
-        import magic  
-        
-        candidate = Candidate.objects.get(id=candidate_id)
         import magic
+        
+        # 1. Fetch candidate with related data
         try:
             candidate = Candidate.objects.select_related('user', 'job__posted_by').get(id=candidate_id)
         except Candidate.DoesNotExist:
             return Response({'error': 'Application not found.'}, status=status.HTTP_404_NOT_FOUND)
 
+        # 2. Check permissions
         is_allowed, error_msg = _check_upload_permission(candidate, request.user)
         if not is_allowed:
             return Response({'error': error_msg}, status=status.HTTP_403_FORBIDDEN)
 
+        # 3. Get required data
         file_key = request.data.get('file_key')
-        client_filename = request.data.get('filename', '')
+        client_filename = request.data.get('filename', '')  # ✅ Use consistent name
+        
         if not file_key:
             return Response({'error': 'file_key required'}, status=400)
 
+        # 4. Prevent duplicate confirmation
+        if candidate.cv_file == file_key:
+            return Response({'error': 'This CV has already been confirmed.'}, status=400)
+
+        # 5. Download and validate file
         download_url = generate_signed_url(file_key, method='get_object', expires_in=300)
-        response = requests.get(download_url)
+        response = requests.get(download_url, timeout=30)
         
-        file_ext = filename.split('.')[-1].lower()
+        if response.status_code != 200:
+            candidate.cv_status = 'error'
+            candidate.save(update_fields=['cv_status'])
+            return Response({'error': f'Failed to download CV (HTTP {response.status_code})'}, status=400)
+
+        # 6. Extract extension from client filename (not file_key)
+        file_ext = client_filename.split('.')[-1].lower() if client_filename else file_key.split('.')[-1].lower()
+        
         with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_ext}') as tmp:
             tmp.write(response.content)
             tmp_path = tmp.name
         
         try:
+            # 7. Validate MIME type
             mime = magic.from_file(tmp_path, mime=True)
             
-            ALLOWED_MIMES = {
-                'pdf': 'application/pdf',
-                'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                'doc': 'application/msword',
-                'png': 'image/png',
-                'jpg': 'image/jpeg',
-                'jpeg': 'image/jpeg',
-            }
-            
-            expected_mime = ALLOWED_MIMES.get(file_ext)
-            if not expected_mime:
-                os.unlink(tmp_path)
-                return Response(
-                    {'error': f'File extension .{file_ext} not supported'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            if mime != expected_mime:
-                os.unlink(tmp_path)
-                return Response(
-                    {'error': f'File content does not match extension. Expected {expected_mime}, got {mime}'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            from apps.candidate.services.text_extraction import extract_cv_text
-            extracted_text = extract_cv_text(tmp_path, file_ext)
-            
-            if not extracted_text:
-                candidate.cv_status = 'error'
-                candidate.save()
-                os.unlink(tmp_path)
-                return Response(
-                    {'error': 'Could not extract text from CV. Please upload a text-based PDF or DOCX.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            candidate.cv_file = file_key
-            candidate.cv_filename = filename
-            candidate.cv_uploaded_at = timezone.now()
-            candidate.cv_text = extracted_text
-            candidate.cv_status = 'processing'
-            candidate.save()
-
-            ActivityLog.objects.create(
-                candidate=candidate,
-                event_type=ActivityLog.EventType.CV_UPLOADED, 
-                note=f"CV uploaded: {filename}",
-                created_by_type=ActivityLog.CreatedByType.CANDIDATE,
-                created_by_id=request.user.id 
-)
-
-            
-            from apps.ai_reports.tasks import analyze_cv_task
-            task = analyze_cv_task.delay(
-                candidate_id=str(candidate.id),
-                cv_text=extracted_text, 
-                job_description=candidate.job.description if candidate.job else ""
-            )
-
-
-            os.unlink(tmp_path)
-
-
-        except magic.MagicException:
-            os.unlink(tmp_path)
-            return Response(
-                {'error': 'Could not validate file format'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        except Exception as e:
-            candidate.cv_status = 'error'
-            candidate.save()
-            if 'tmp_path' in locals():
-                os.unlink(tmp_path)
-         
-            logger.error(f"CV upload error for candidate {candidate_id}: {str(e)}")
-            return Response(
-                {'error': 'Server error during CV processing'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-        return Response({'status': 'CV uploaded successfully', 'cv_status': 'processing'})
-        
-        if candidate.cv_file == file_key:
-            return Response({'error': 'This CV has already been confirmed.'}, status=400)
-
-        candidate.cv_file = file_key
-        candidate.cv_filename = client_filename
-        candidate.cv_uploaded_at = timezone.now()
-        candidate.save(update_fields=['cv_file', 'cv_filename', 'cv_uploaded_at'])
-
-        try:
-            download_url = generate_signed_url(file_key, method='get_object', expires_in=300)
-            logger.info(f"Downloading CV from {download_url}")
-            resp = requests.get(download_url, timeout=30)
-            if resp.status_code != 200:
-                candidate.cv_status = 'error'
-                candidate.save(update_fields=['cv_status'])
-                return Response({'error': f'Failed to download CV (HTTP {resp.status_code})'}, status=400)
-
-            ext = file_key.split('.')[-1].lower()
-            with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{ext}') as tmp:
-                tmp.write(resp.content)
-                tmp_path = tmp.name
-
-            mime = magic.from_file(tmp_path, mime=True)
-            logger.info(f"Detected MIME type: {mime}")
-
             ALLOWED_MIMES = {
                 'application/pdf': 'pdf',
                 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
-                'application/msword': 'doc', 
+                'application/msword': 'doc',
                 'image/png': 'png',
                 'image/jpeg': 'jpg',
             }
+            
             if mime not in ALLOWED_MIMES:
                 os.unlink(tmp_path)
                 candidate.cv_status = 'error'
                 candidate.save(update_fields=['cv_status'])
                 return Response(
                     {'error': f'Invalid file type: {mime}. Allowed: PDF, DOCX, PNG, JPEG.'},
-                    status=400
+                    status=status.HTTP_400_BAD_REQUEST
                 )
 
-            detected_ext = ALLOWED_MIMES[mime]
-            if detected_ext != ext:
-                logger.warning(f"MIME extension mismatch: file_key says {ext}, but content is {detected_ext}")
-
+            # 8. Extract text
             from apps.candidate.services.text_extraction import extract_cv_text
+            detected_ext = ALLOWED_MIMES[mime]
             extracted_text = extract_cv_text(tmp_path, detected_ext)
-            os.unlink(tmp_path)
-
+            
             if not extracted_text:
                 candidate.cv_status = 'error'
                 candidate.save(update_fields=['cv_status'])
+                os.unlink(tmp_path)
                 return Response(
-                    {'error': 'Could not extract text from CV. Please upload a text‑based PDF or DOCX.'},
-                    status=400
+                    {'error': 'Could not extract text from CV. Please upload a text-based PDF or DOCX.'},
+                    status=status.HTTP_400_BAD_REQUEST
                 )
-
+            
+            # 9. Update candidate
+            candidate.cv_file = file_key
+            candidate.cv_filename = client_filename
+            candidate.cv_uploaded_at = timezone.now()
             candidate.cv_text = extracted_text
-            candidate.save(update_fields=['cv_text'])
-
-            job = candidate.job
-            core_skills_list = job.core_skills if job.core_skills else []
-            core_skills_str = ", ".join(core_skills_list) if core_skills_list else "None specified"
-            education_level_display = job.get_education_level_display()
-            job_description = (
-                f"Job Title: {job.title}\n\n"
-                f"Description:\n{job.description or ''}\n\n"
-                f"Requirements:\n{job.requirements or ''}\n\n"
-                f"Minimum Education Level Required:\n{education_level_display}\n\n"
-                f"Core Skills Required:\n{core_skills_str}"
-            )
-            from apps.ai_reports.tasks import analyze_cv_task
-            analyze_cv_task.delay(str(candidate.id), extracted_text, job_description, core_skills_list, education_level_display)
-
             candidate.cv_status = Candidate.CVStatus.PROCESSING
-            candidate.save(update_fields=['cv_status'])
+            candidate.save()
 
+            # 10. Log activity ✅
             ActivityLog.objects.create(
                 candidate=candidate,
-                event_type=ActivityLog.EventType.AI_ANALYSIS_QUEUED, 
-                note="AI analysis queued",
+                event_type=ActivityLog.EventType.CV_UPLOADED,
+                note=f"CV uploaded: {client_filename}",
                 created_by_type=ActivityLog.CreatedByType.CANDIDATE,
-                created_by_id=None,
-                visibility=ActivityLog.Visibility.BOTH,
+                created_by_id=request.user.id
             )
 
+            # 11. Queue AI analysis
+            job = candidate.job
+            if job:
+                core_skills_str = ", ".join(job.core_skills) if job.core_skills else "None specified"
+                education_display = job.get_education_level_display() if hasattr(job, 'get_education_level_display') else ''
+                job_description = (
+                    f"Job Title: {job.title}\n\n"
+                    f"Description:\n{job.description or ''}\n\n"
+                    f"Requirements:\n{job.requirements or ''}\n\n"
+                    f"Minimum Education Level Required:\n{education_display}\n\n"
+                    f"Core Skills Required:\n{core_skills_str}"
+                )
+            else:
+                job_description = ""
+            
+            from apps.ai_reports.tasks import analyze_cv_task
+            analyze_cv_task.delay(
+                candidate_id=str(candidate.id),
+                cv_text=extracted_text,
+                job_description=job_description,
+                core_skills=job.core_skills if job else [],
+                education_level=education_display if job else ''
+            )
+
+            os.unlink(tmp_path)
             logger.info(f"CV confirmed & queued for candidate {candidate_id}")
             return Response({'status': 'CV uploaded successfully', 'cv_status': 'processing'})
 
+        except magic.MagicException:
+            os.unlink(tmp_path)
+            candidate.cv_status = 'error'
+            candidate.save(update_fields=['cv_status'])
+            return Response(
+                {'error': 'Could not validate file format'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         except Exception as e:
             logger.error(f"CV confirm failed for candidate {candidate_id}: {e}", exc_info=True)
+            if 'tmp_path' in locals():
+                os.unlink(tmp_path)
             candidate.cv_status = 'error'
             candidate.save(update_fields=['cv_status'])
             return Response(
