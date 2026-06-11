@@ -280,29 +280,24 @@ class CVUploadConfirmView(APIView):
         import os
         import magic
         
-        # 1. Fetch candidate with related data
         try:
             candidate = Candidate.objects.select_related('user', 'job__posted_by').get(id=candidate_id)
         except Candidate.DoesNotExist:
             return Response({'error': 'Application not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        # 2. Check permissions
         is_allowed, error_msg = _check_upload_permission(candidate, request.user)
         if not is_allowed:
             return Response({'error': error_msg}, status=status.HTTP_403_FORBIDDEN)
 
-        # 3. Get required data
         file_key = request.data.get('file_key')
         client_filename = request.data.get('filename', '')  # ✅ Use consistent name
         
         if not file_key:
             return Response({'error': 'file_key required'}, status=400)
 
-        # 4. Prevent duplicate confirmation
         if candidate.cv_file == file_key:
             return Response({'error': 'This CV has already been confirmed.'}, status=400)
 
-        # 5. Download and validate file
         download_url = generate_signed_url(file_key, method='get_object', expires_in=300)
         response = requests.get(download_url, timeout=30)
         
@@ -311,7 +306,6 @@ class CVUploadConfirmView(APIView):
             candidate.save(update_fields=['cv_status'])
             return Response({'error': f'Failed to download CV (HTTP {response.status_code})'}, status=400)
 
-        # 6. Extract extension from client filename (not file_key)
         file_ext = client_filename.split('.')[-1].lower() if client_filename else file_key.split('.')[-1].lower()
         
         with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_ext}') as tmp:
@@ -319,7 +313,6 @@ class CVUploadConfirmView(APIView):
             tmp_path = tmp.name
         
         try:
-            # 7. Validate MIME type
             mime = magic.from_file(tmp_path, mime=True)
             
             ALLOWED_MIMES = {
@@ -339,7 +332,6 @@ class CVUploadConfirmView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            # 8. Extract text
             from apps.candidate.services.text_extraction import extract_cv_text
             detected_ext = ALLOWED_MIMES[mime]
             extracted_text = extract_cv_text(tmp_path, detected_ext)
@@ -353,7 +345,6 @@ class CVUploadConfirmView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # 9. Update candidate
             candidate.cv_file = file_key
             candidate.cv_filename = client_filename
             candidate.cv_uploaded_at = timezone.now()
@@ -361,7 +352,6 @@ class CVUploadConfirmView(APIView):
             candidate.cv_status = Candidate.CVStatus.PROCESSING
             candidate.save()
 
-            # 10. Log activity ✅
             ActivityLog.objects.create(
                 candidate=candidate,
                 event_type=ActivityLog.EventType.CV_UPLOADED,
@@ -370,7 +360,6 @@ class CVUploadConfirmView(APIView):
                 created_by_id=request.user.id
             )
 
-            # 11. Queue AI analysis
             job = candidate.job
             if job:
                 core_skills_str = ", ".join(job.core_skills) if job.core_skills else "None specified"

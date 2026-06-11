@@ -5,7 +5,6 @@ import os
 import platform
 import logging
 import tempfile
-# import textract
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -13,43 +12,37 @@ logger = logging.getLogger(__name__)
 
 def get_poppler_path():
     """Get Poppler path from settings, env var, or OS-specific default."""
-    # Try settings first
     if hasattr(settings, 'POPPLER_BIN'):
         return settings.POPPLER_BIN
     
-    # Try environment variable
     env_path = os.getenv('POPPLER_PATH')
     if env_path:
         return env_path
     
-    # OS-specific defaults
     system = platform.system()
     if system == 'Windows':
         return r'C:\Program Files\poppler\Library\bin'
-    elif system == 'Darwin':  # macOS
+    elif system == 'Darwin':  
         return '/usr/local/bin'
-    else:  # Linux
+    else:  
         return '/usr/bin'
 
 
 def get_tesseract_path():
     """Get Tesseract path from settings, env var, or OS-specific default."""
-    # Try settings first
     if hasattr(settings, 'TESSERACT_PATH'):
         return settings.TESSERACT_PATH
     
-    # Try environment variable
     env_path = os.getenv('TESSERACT_PATH')
     if env_path:
         return env_path
     
-    # OS-specific defaults
     system = platform.system()
     if system == 'Windows':
         return r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-    elif system == 'Darwin':  # macOS
+    elif system == 'Darwin': 
         return '/usr/local/bin/tesseract'
-    else:  # Linux
+    else: 
         return '/usr/bin/tesseract'
 
 
@@ -97,21 +90,17 @@ def extract_text_from_scanned_pdf(file_path):
     poppler_path = get_poppler_path()
     tesseract_path = get_tesseract_path()
     
-    # Optional validation (can be removed for flexibility)
     if poppler_path and not os.path.exists(poppler_path):
         logger.warning(f"Poppler path not found: {poppler_path}, attempting auto-detection")
-        poppler_path = None  # Let pdf2image try to auto-detect
+        poppler_path = None  
     
     try:
-        # Set Tesseract path
         pytesseract.pytesseract.tesseract_cmd = tesseract_path
         logger.info(f"Using Tesseract at: {tesseract_path}")
         
-        # Convert PDF to images
         logger.info(f"Converting PDF to images with Poppler at: {poppler_path or 'auto-detect'}")
         images = convert_from_path(file_path, poppler_path=poppler_path)
         
-        # Extract text from each page
         all_text = []
         for i, image in enumerate(images):
             text = pytesseract.image_to_string(image)
@@ -171,13 +160,11 @@ def extract_cv_text(file_path, file_extension):
     logger.info(f"Extracting text from {file_extension} file: {file_path}")
     
     if file_extension == 'pdf':
-        # Try direct text extraction first
         text = extract_text_from_pdf(file_path)
         if text and len(text) > 100:
             logger.info(f"PDF text extracted directly: {len(text)} chars")
             return text
         
-        # Fallback to OCR for scanned PDFs
         logger.info("No text found in PDF, trying OCR...")
         text = extract_text_from_scanned_pdf(file_path)
         if text:

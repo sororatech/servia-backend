@@ -118,3 +118,4 @@ class SystemHealthDashboard(APIView):
                 'project_url': f"https://sentry.io/organizations/{org}/projects/{project}/",
             }
         })
+
