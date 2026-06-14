@@ -8,9 +8,9 @@ from dotenv import load_dotenv
 import sentry_sdk
 from sentry_sdk.integrations.django import DjangoIntegration
 
-load_dotenv()
-
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
+
 
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-dev-key-change-in-prod')
 
@@ -82,14 +82,13 @@ if DATABASE_URL:
         'default': dj_database_url.parse(DATABASE_URL)
     }
 else:
-    # Fallback for Docker
     DATABASES = {
         'default': {
             'ENGINE': 'django.db.backends.postgresql',
             'NAME': os.getenv('POSTGRES_DB', 'servia'),
             'USER': os.getenv('POSTGRES_USER', 'servia'),
             'PASSWORD': os.getenv('POSTGRES_PASSWORD', 'servia123'),
-            'HOST': 'db',  # Only for Docker!
+            'HOST': 'db',  
             'PORT': '5432',
         }
     }
@@ -100,7 +99,7 @@ CHANNEL_LAYERS = {
         'CONFIG': {"hosts": [os.getenv('REDIS_URL', 'redis://redis:6379')]},
     },
 }
-AUTH_USER_MODEL = 'auth.User'  # Default user model
+AUTH_USER_MODEL = 'auth.User' 
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
@@ -133,14 +132,14 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 SENTRY_DSN = os.getenv('SENTRY_DSN', '')
 
-if SENTRY_DSN and not DEBUG:
+if SENTRY_DSN:  
     sentry_sdk.init(
         dsn=SENTRY_DSN,
         integrations=[DjangoIntegration()],
         send_default_pii=False,
-        traces_sample_rate=1.0 if DEBUG else 0.1,
-        environment='production' if not DEBUG else 'development',
-        before_send=lambda event, hint: _filter_event(event, hint), 
+        traces_sample_rate=1.0,
+        environment='development',
+        before_send=lambda event, hint: _filter_event(event, hint),
     )
 def _filter_event(event, hint):
     """Strip any remaining PII from Sentry events 
@@ -151,31 +150,27 @@ def _filter_event(event, hint):
             'id': event['user'].get('id'),  
         }
     return event
-# Allow all origins only in development (and only if credentials are NOT used)
+
 CORS_ALLOW_ALL_ORIGINS = os.getenv('CORS_ALLOW_ALL_ORIGINS', 'False') == 'True'
 
-# Parse explicit origins from env var - '*' is NOT valid here
 cors_allowed_raw = os.getenv('CORS_ALLOWED_ORIGINS', '')
 if cors_allowed_raw and cors_allowed_raw != '*':
     CORS_ALLOWED_ORIGINS = [
         origin.strip() for origin in cors_allowed_raw.split(',') if origin.strip()
     ]
 else:
-    # Default development origins
     CORS_ALLOWED_ORIGINS = [
         'http://localhost:3000',
         'http://127.0.0.1:3000',
         'http://localhost:8000',
     ]
 
-# Allow credentials (cookies, auth headers) - requires explicit origins
 CORS_ALLOW_CREDENTIALS = os.getenv('CORS_ALLOW_CREDENTIALS', 'True') == 'True'
 
 
-# Django REST Framework Configuration
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.TokenAuthentication',
+        'rest_framework.authentication.TokenAuthentication', 
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
@@ -185,13 +180,14 @@ REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'EXCEPTION_HANDLER': 'apps.users.exceptions.custom_exception_handler',
     'DEFAULT_THROTTLE_CLASSES': [
-        'rest_framework.throttling.UserRateThrottle',
+        'rest_framework.throttling.AnonRateThrottle',   
+        'rest_framework.throttling.UserRateThrottle',  
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'login': '10/min', 
-        'login_hourly': '30/hour',
-        'user': '1000/day',
-    },
+        'anon': '100/day',       
+        'user': '1000/day',         
+        'bulk_update': '10/min',    
+    }, 
 }
 SPECTACULAR_SETTINGS = {
     'TITLE': 'ServiaAI API',
@@ -200,7 +196,6 @@ SPECTACULAR_SETTINGS = {
     'SERVE_INCLUDE_SCHEMA': False,
 }
 
-# Cloudflare R2 Settings (required for CV storage)
 CLOUDFLARE_R2_ACCESS_KEY = os.environ.get('CLOUDFLARE_R2_ACCESS_KEY')
 CLOUDFLARE_R2_SECRET_KEY = os.environ.get('CLOUDFLARE_R2_SECRET_KEY')
 CLOUDFLARE_R2_BUCKET = os.environ.get('CLOUDFLARE_R2_BUCKET', 'servia-cv-storage')
@@ -210,11 +205,9 @@ CLOUDFLARE_R2_ENDPOINT = os.environ.get('CLOUDFLARE_R2_ENDPOINT')
 
 CLOUDFLARE_STREAM_TOKEN = os.environ.get('CLOUDFLARE_STREAM_TOKEN', None)
 
-# Validate required settings for CV storage
 if not all([CLOUDFLARE_R2_ACCESS_KEY, CLOUDFLARE_R2_SECRET_KEY, CLOUDFLARE_R2_ENDPOINT]):
     raise ValueError("Missing required Cloudflare R2 environment variables")
 
-# File upload limits
 MAX_CV_SIZE_MB = 10
 MAX_VIDEO_SIZE_MB = 50
 MAX_VIDEO_DURATION_SECONDS = 120
@@ -232,15 +225,24 @@ EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'misginameaza@gmail.com')
 
+
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
 
-# Tesseract OCR path
 TESSERACT_PATH = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-# Celery Config (add to settings.py)
 CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://redis:6379/0')
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Africa/Nairobi'
 CELERY_RESULT_BACKEND = 'django-db'
+
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": os.getenv("REDIS_URL", "redis://redis:6379/0"),
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        }
+    }
+}

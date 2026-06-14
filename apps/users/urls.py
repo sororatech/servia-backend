@@ -16,7 +16,12 @@ urlpatterns = [
     path('verify-email/', views.VerifyEmailView.as_view(), name='verify-email'),
     path('resend-verification/', views.ResendVerificationView.as_view(), name='resend-verification'),
     path('recruiters/me/stats/', views.RecruiterStatsView.as_view(), name='recruiter-stats'),
-    path('profile/', views.UserProfileView.as_view(), name='user-profile'),
-    path('me/', views.UserProfileView.as_view(), name='user-profile'), 
+    path('profile/', views.UserProfileDetailView.as_view(), name='user-profile'),
+    path('me/', views.UserProfileDetailView.as_view(), name='user-profile'), 
+    path('users/me/', views.UserProfileDetailView.as_view(), name='user-profile'),
+    path('change-password/', views.ChangePasswordView.as_view(), name='change-password'),
+    path('avatar/upload-url/', views.AvatarUploadURLView.as_view(), name='avatar-upload-url'),
+    path('avatar/confirm/', views.AvatarUploadConfirmView.as_view(), name='avatar-confirm'),
+    path('recruiters/stats/', views.RecruiterStatsView.as_view(), name='recruiter-stats'),
     path('', include(router.urls))
 ]

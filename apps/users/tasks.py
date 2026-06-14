@@ -4,6 +4,10 @@ from celery import shared_task
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.conf import settings
+from django.utils import timezone
+from django.db.models import F
+import requests, time
+from .models import SystemMetric
 
 logger = logging.getLogger(__name__)
 
@@ -239,14 +243,12 @@ def send_password_reset_email(user_email, reset_url):
     user_name = ""
     try:
         user = User.objects.get(email=user_email)
-        # Handle both CandidateUser and RecruiterUser models
         if hasattr(user, 'first_name') and user.first_name:
             user_name = user.first_name
         elif hasattr(user, 'name') and user.name:
             user_name = user.name
     except User.DoesNotExist:
         logger.warning(f"Password reset requested for non-existent email: {user_email}")
-        # Still try to send email? No, return silently for security
     
     try:
         context = {
@@ -290,7 +292,8 @@ def cleanup_unverified_users():
     except Exception as e:
         logger.error(f"Failed to cleanup unverified users: {str(e)}")
         return 0
-    
+
+
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def send_verification_email(self, user_email, verification_code, user_name=""):
     """Send verification code email with retry logic."""
@@ -310,7 +313,25 @@ def send_verification_email(self, user_email, verification_code, user_name=""):
         )
         logger.info(f"Verification email sent to {user_email}")
     except Exception as e:
-        # Log full traceback for debugging
         logger.error(f"Failed to send verification email to {user_email}: {str(e)}", exc_info=True)
-        # Retry with exponential backoff: 60s, 120s, 240s
         raise self.retry(exc=e, countdown=60 * (2 ** self.request.retries))
+
+
+@shared_task
+def check_system_health():
+    key_date = timezone.now().strftime('%Y-%m-%d')
+    
+    health_url = os.getenv('HEALTH_CHECK_URL', 'http://localhost:8000/health/')
+    
+    try:
+        start = time.time()
+        r = requests.get(health_url, timeout=10)
+        key = f"health_ok_{key_date}" if r.status_code == 200 else f"health_fail_{key_date}"
+        if not SystemMetric.objects.filter(key=key).update(value=F('value') + 1):
+            SystemMetric.objects.create(key=key, value=1)
+        logger.info(f"✓ Health check logged: {key}")
+    except Exception as e:
+        key = f"health_fail_{key_date}"
+        if not SystemMetric.objects.filter(key=key).update(value=F('value') + 1):
+            SystemMetric.objects.create(key=key, value=1)
+        logger.error(f"✗ Health check failed: {e}")

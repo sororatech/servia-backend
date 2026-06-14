@@ -9,7 +9,6 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     Password is write-only.
     """
     password = serializers.CharField(write_only=True, validators=[validate_password])
-    # Make username optional (it will be auto-filled)
     username = serializers.CharField(required=False)
 
     class Meta:
@@ -18,7 +17,6 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         read_only_fields = ['id']
 
     def validate(self, data):
-        # If username not provided, set it to email
         if 'username' not in data or not data['username']:
             data['username'] = data.get('email')
         return data
@@ -37,7 +35,7 @@ class CandidateUserSerializer(serializers.ModelSerializer):
     Serializer for CandidateUser profile.
     Includes nested User data.
     """
-    user = UserRegistrationSerializer()  # uses our custom registration serializer
+    user = UserRegistrationSerializer()  
 
     class Meta:
         model = CandidateUser
@@ -66,12 +64,14 @@ class RecruiterUserSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
     def create(self, validated_data):
-        user_data = validated_data.pop('user')
-        user_serializer = UserRegistrationSerializer(data=user_data)
-        user_serializer.is_valid(raise_exception=True)
-        user = user_serializer.save()
-        recruiter = RecruiterUser.objects.create(user=user, **validated_data)
-        return recruiter
+       
+        if 'user' in validated_data:
+            user_data = validated_data.pop('user')
+            user_serializer = UserRegistrationSerializer(data=user_data)
+            user_serializer.is_valid(raise_exception=True)
+            user = user_serializer.save()
+            recruiter = RecruiterUser.objects.create(user=user, **validated_data)
+            return recruiter
 class UserProfileSerializer(serializers.ModelSerializer):
     """
     Read-only serializer for user profile.

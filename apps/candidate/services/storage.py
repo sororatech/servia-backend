@@ -2,7 +2,7 @@ import boto3
 from botocore.config import Config
 from django.conf import settings
 
-def generate_signed_url(file_key, method='put_object', expires_in=900, content_type=None):
+def generate_signed_url(file_key, method='put_object', expires_in=900, content_type=None, response_content_disposition=None):
     """
     Generate a presigned URL for Cloudflare R2.
     
@@ -11,7 +11,7 @@ def generate_signed_url(file_key, method='put_object', expires_in=900, content_t
         method: 'put_object' for upload, 'get_object' for download
         expires_in: URL expiry in seconds (default: 15 minutes)
         content_type: MIME type of the file (only used for uploads)
-    
+        response_content_disposition: Content disposition for download responses
     Returns:
         str: Presigned URL
     """
@@ -34,6 +34,9 @@ def generate_signed_url(file_key, method='put_object', expires_in=900, content_t
     if content_type and method == 'put_object':
         params['ContentType'] = content_type
     
+    if response_content_disposition and method == 'get_object':
+        params['ResponseContentDisposition'] = response_content_disposition
+
     url = s3.generate_presigned_url(
         ClientMethod=method,
         Params=params,

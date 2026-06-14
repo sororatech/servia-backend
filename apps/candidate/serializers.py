@@ -7,6 +7,21 @@ from botocore.config import Config
 from apps.job.serializers import JobSerializer
 from apps.job.serializers import JobBasicSerializer
 
+VALID_TRANSITIONS = {
+    Candidate.Status.APPLIED: [Candidate.Status.SCREENED, Candidate.Status.REJECTED_CV, Candidate.Status.WITHDRAWN],
+    Candidate.Status.SCREENED: [Candidate.Status.SHORTLISTED, Candidate.Status.REJECTED_CV, Candidate.Status.HOLD, Candidate.Status.WITHDRAWN],
+    Candidate.Status.SHORTLISTED: [Candidate.Status.VIDEO_SUBMITTED, Candidate.Status.INTERVIEW_SCHEDULED, Candidate.Status.REJECTED_CV, Candidate.Status.WITHDRAWN],
+    Candidate.Status.VIDEO_SUBMITTED: [Candidate.Status.INTERVIEW_SCHEDULED, Candidate.Status.REJECTED_CV, Candidate.Status.WITHDRAWN],
+    Candidate.Status.INTERVIEW_SCHEDULED: [Candidate.Status.INTERVIEWED, Candidate.Status.REJECTED_INTERVIEW, Candidate.Status.WITHDRAWN],
+    Candidate.Status.INTERVIEWED: [Candidate.Status.OFFERED, Candidate.Status.REJECTED_INTERVIEW, Candidate.Status.WITHDRAWN],
+    Candidate.Status.OFFERED: [Candidate.Status.HIRED, Candidate.Status.REJECTED_INTERVIEW, Candidate.Status.WITHDRAWN],
+    Candidate.Status.HOLD: [Candidate.Status.SHORTLISTED, Candidate.Status.REJECTED_CV, Candidate.Status.WITHDRAWN],
+    # Terminal states have no transitions
+    Candidate.Status.HIRED: [],
+    Candidate.Status.REJECTED_CV: [],
+    Candidate.Status.REJECTED_INTERVIEW: [],
+    Candidate.Status.WITHDRAWN: [],
+}
 class UserBasicSerializer(serializers.ModelSerializer):
     """
     Simplified user serializer for nested display.
@@ -29,7 +44,8 @@ class CandidateSerializer(serializers.ModelSerializer):
         model = Candidate
         fields = '__all__'
         read_only_fields = ['id', 'applied_at', 'updated_at', 'user']
-    
+    import logging
+    logger = logging.getLogger(__name__)
     def get_cv_download_url(self, obj):
         """Generate signed R2 URL for CV download (1-hour expiry)"""
         if not obj.cv_file:
@@ -61,9 +77,59 @@ class CandidateSerializer(serializers.ModelSerializer):
             return url
         except Exception as e:
             # Log error but don't break the response
-            print(f"Error generating CV download URL: {e}")
+            logger.error(f"Failed to generate CV download URL for candidate {obj.id}: {e}", exc_info=True)
             return None
-    
+    cv_preview_url = serializers.SerializerMethodField()
+
+    def get_cv_preview_url(self, obj):
+        """Generate signed R2 URL for CV preview (inline display)"""
+        if not obj.cv_file:
+            return None
+        try:
+            r2_config = Config(
+                signature_version='s3v4',
+                region_name='auto',
+            )
+            r2_client = boto3.client(
+                's3',
+                endpoint_url=settings.CLOUDFLARE_R2_ENDPOINT,
+                aws_access_key_id=settings.CLOUDFLARE_R2_ACCESS_KEY,
+                aws_secret_access_key=settings.CLOUDFLARE_R2_SECRET_KEY,
+                config=r2_config,
+            )
+            url = r2_client.generate_presigned_url(
+                'get_object',
+                Params={
+                    'Bucket': settings.CLOUDFLARE_R2_BUCKET,
+                    'Key': obj.cv_file,
+                    'ResponseContentDisposition': f'inline; filename="{obj.cv_filename}"'
+                },
+                ExpiresIn=3600
+            )
+            return url
+        except Exception as e:
+            logger.error(f"Failed to generate CV preview URL for candidate {obj.id}: {e}", exc_info=True)
+            return None
+    def validate(self, data):
+        """Prevent duplicate applications (same user + job)"""
+        user = self.context['request'].user
+        job = data.get('job')
+        
+        if user and job:
+            if Candidate.objects.filter(user=user, job=job, deleted_at__isnull=True).exists():
+                raise serializers.ValidationError({
+                    'job': 'You have already applied to this job.'
+                })
+        instance = self.instance
+        if instance and 'status' in data:
+            old_status = instance.status
+            new_status = data['status']
+            if new_status not in VALID_TRANSITIONS.get(old_status, []):
+                raise serializers.ValidationError({
+                    'status': f"Cannot transition from '{old_status}' to '{new_status}'. Allowed: {VALID_TRANSITIONS.get(old_status, [])}"
+                })
+        return data
+
     def get_video_download_url(self, obj):
         """Generate signed URL for video download"""
         if not obj.video_intro_url:
@@ -92,16 +158,20 @@ class MyApplicationSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'applied_at']
     
     def get_ai_report(self, obj):
-        """Get latest AI report for this application"""
+        """Get latest AI report for this application with skills match"""
         from apps.ai_reports.models import AIReport
         report = AIReport.objects.filter(
             candidate=obj,
             report_type=AIReport.ReportType.CV_SCREENING
-        ).order_by('-created_at').first()
+        ).select_related('candidate__job').order_by('-created_at').first()
         
         if report:
             return {
                 'fit_score': report.fit_score,
+                'skills_match_score': report.skills_match_details.get('match_score') if report.skills_match_details else None,
+                'matched_skills': report.skills_match_details.get('matched_skills', []) if report.skills_match_details else [],
+                'missing_skills': report.skills_match_details.get('missing_skills', []) if report.skills_match_details else [],
+                'match_explanation': report.skills_match_details.get('match_explanation', '') if report.skills_match_details else '',
                 'summary': report.summary,
                 'recommendation': report.recommendation,
                 'created_at': report.created_at.isoformat()
