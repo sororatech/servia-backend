@@ -11,9 +11,15 @@ class IsRecruiter(permissions.BasePermission):
 
 class IsAdminRecruiter(permissions.BasePermission):
     """
-    Allows access only to recruiters with role='admin'.
+    Allows access to:
+    - Superusers (Django superusers)
+    - Recruiters with role='admin'
     """
     def has_permission(self, request, view):
-        return (request.user.is_authenticated and
-                hasattr(request.user, 'recruiter_profile') and
-                request.user.recruiter_profile.role == 'admin')
+        
+        user = request.user
+        if not user.is_authenticated:
+            return False
+        if user.is_superuser:
+            return True
+        return hasattr(user, 'recruiter_profile') and user.recruiter_profile.role == 'admin'
