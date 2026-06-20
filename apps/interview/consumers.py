@@ -5,31 +5,47 @@ import uuid
 import asyncio
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+from django.core.cache import cache
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-# from apps.ai_reports.models import AIReport
+from apps.interview.models import Interview, InterviewConversation
 from apps.ai_reports.services.gemini_client import (
     analyze_interview,
     generate_follow_up_questions,
 )
-# from apps.interview.models import Interview, InterviewConversation
 
 logger = logging.getLogger(__name__)
 
+FOLLOW_UP_CACHE_TTL = 60 * 60 * 24
+
+
+def follow_up_cache_key(interview_id) -> str:
+    return f"interview_followups:{interview_id}"
+
 
 class InterviewConsumer(AsyncWebsocketConsumer):
-    MIN_FOLLOW_UP_WORDS = 12
-    MIN_NEW_WORDS_FOR_REFRESH = 8
+    MIN_FOLLOW_UP_WORDS = 5
+    MIN_NEW_WORDS_FOR_REFRESH = 5
 
     async def connect(self):
         from apps.ai_reports.models import AIReport
+
+        # Browser clients (recruiter/candidate live pages) authenticate by passing
+        # the token as a WebSocket subprotocol: ["auth", "<token>"]. The browser
+        # aborts the handshake (close code 1006) unless the server echoes one of
+        # the offered subprotocols, so we capture and echo it on every accept().
+        self.offered_subprotocols = list(self.scope.get("subprotocols") or [])
+        self.accept_subprotocol = (
+            self.offered_subprotocols[0] if self.offered_subprotocols else None
+        )
+
         raw_interview_id = self.scope["url_route"]["kwargs"]["interview_id"]
         try:
             self.interview_id = str(uuid.UUID(str(raw_interview_id)))
         except (TypeError, ValueError):
             logger.warning("Rejected websocket connection with invalid interview ID: %s", raw_interview_id)
-            await self.accept()
+            await self._accept()
             await self.close(code=4400)
             return
 
@@ -37,27 +53,52 @@ class InterviewConsumer(AsyncWebsocketConsumer):
         self.candidate_live_buffer = ""
         self.last_follow_up_buffer = ""
 
-        query_string = self.scope["query_string"].decode()
-        token_key = None
-        if "token=" in query_string:
-            token_key = query_string.split("token=")[1].split("&")[0]
+        # The user is resolved by TokenAuthMiddleware (cookie / query / subprotocol).
+        self.user = self.scope.get("user")
 
-        self.user = await self.authenticate_token(token_key)
-
-        if self.user is None:
-            await self.accept()
+        if self.user is None or not self.user.is_authenticated:
+            await self._accept()
             await self.close(code=4003)
             return
 
+        # Complete the HTTP upgrade immediately so slow DB lookups cannot cause
+        # browser-side handshake timeouts (close code 1006).
+        await self._accept()
+
+        # Authorize: only the interview's candidate, the recruiter who posted the
+        # job, or staff may connect to this interview's stream.
+        if not await self._user_can_access(self.user):
+            logger.warning(
+                "User %s denied access to interview %s",
+                getattr(self.user, "id", None),
+                self.interview_id,
+            )
+            await self.close(code=4003)
+            return
+
+        self.joined_group = False
         await self.channel_layer.group_add(self.group_name, self.channel_name)
-        await self.accept()
-        await self._broadcast_event(
-            event_type="interview_status",
-            payload={"status": "connected", "interview_id": str(self.interview_id)},
-        )
+        self.joined_group = True
+        await self.send(text_data=json.dumps({
+            "type": "interview_status",
+            "status": "connected",
+            "interview_id": str(self.interview_id),
+        }))
+
+    async def _accept(self):
+        """Accept the connection, echoing the offered subprotocol when present.
+
+        Browsers require the server to select one of the subprotocols they
+        offered; without this the handshake fails with close code 1006.
+        """
+        if self.accept_subprotocol:
+            await self.accept(subprotocol=self.accept_subprotocol)
+        else:
+            await self.accept()
 
     async def disconnect(self, close_code):
-        await self.channel_layer.group_discard(self.group_name, self.channel_name)
+        if getattr(self, "joined_group", False):
+            await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive(self, text_data):
         from apps.interview.models import Interview, InterviewConversation
@@ -99,31 +140,11 @@ class InterviewConsumer(AsyncWebsocketConsumer):
                 )
                 if reset_follow_up_state:
                     self.last_follow_up_buffer = ""
-
-                candidate_text = self.candidate_live_buffer
-                if self._should_generate_follow_up(candidate_text):
-                    context = await self._get_candidate_context(candidate_text)
-                    questions = await self._generate_follow_ups(candidate_text, context)
-                    if questions:
-                        logger.info(
-                            "Emitting follow-up questions for interview %s: %s",
-                            self.interview_id,
-                            questions,
-                        )
-                        self.last_follow_up_buffer = candidate_text
-                        await self._broadcast_event(
-                            event_type="follow_up_questions",
-                            payload={
-                                "questions": questions,
-                                "candidate_text": candidate_text,
-                                "context": context,
-                                "interview_id": str(self.interview_id),
-                                "timestamp": timestamp,
-                                "automatic": True,
-                                "trigger": "live_chunk_threshold",
-                            },
-                        )
+                await self._try_emit_follow_ups(timestamp)
             else:
+                # Recruiter spoke — treat that as end-of-turn and flush any pending
+                # candidate answer before clearing the live buffer.
+                await self._try_emit_follow_ups(timestamp)
                 self.candidate_live_buffer = ""
                 self.last_follow_up_buffer = ""
 
@@ -134,17 +155,42 @@ class InterviewConsumer(AsyncWebsocketConsumer):
                 return
 
             questions = await self._generate_follow_ups(candidate_text, context)
-            logger.info(
-                "Emitting manual follow-up questions for interview %s: %s",
-                self.interview_id,
-                questions,
-            )
+            if questions:
+                await self._publish_follow_up_questions(
+                    questions=questions,
+                    candidate_text=candidate_text,
+                    context=context,
+                    timestamp=timestamp,
+                    automatic=False,
+                    trigger="manual",
+                )
+
+        elif event_type == "bot_status":
+            status = (data.get("status") or "").strip().lower()
+            if status == "joined" and data.get("session_start"):
+                cleared = await self._start_live_session()
+                logger.info(
+                    "Started live session for interview %s (cleared %s transcript rows)",
+                    self.interview_id,
+                    cleared,
+                )
+                self.candidate_live_buffer = ""
+                self.last_follow_up_buffer = ""
+                await self._broadcast_event(
+                    event_type="session_started",
+                    payload={
+                        "interview_id": str(self.interview_id),
+                        "timestamp": timestamp,
+                        "cleared_transcript_rows": cleared,
+                    },
+                )
+            elif status == "joined":
+                await self._mark_bot_joined()
+
             await self._broadcast_event(
-                event_type="follow_up_questions",
+                event_type="bot_status",
                 payload={
-                    "questions": questions,
-                    "candidate_text": candidate_text,
-                    "context": context,
+                    "status": status,
                     "interview_id": str(self.interview_id),
                     "timestamp": timestamp,
                 },
@@ -279,17 +325,121 @@ class InterviewConsumer(AsyncWebsocketConsumer):
             },
         )
 
-    @database_sync_to_async
-    def authenticate_token(self, token_key):
-        if not token_key:
-            return None
-        try:
-            from rest_framework.authtoken.models import Token
+    async def _try_emit_follow_ups(self, timestamp):
+        candidate_text = (self.candidate_live_buffer or "").strip()
+        if not candidate_text or not self._should_generate_follow_up(candidate_text):
+            return
 
-            token = Token.objects.get(key=token_key)
-            return token.user
-        except Exception:
-            return None
+        context = await self._get_candidate_context(candidate_text)
+        questions = await self._generate_follow_ups(candidate_text, context)
+        if not questions:
+            return
+
+        self.last_follow_up_buffer = candidate_text
+        await self._publish_follow_up_questions(
+            questions=questions,
+            candidate_text=candidate_text,
+            context=context,
+            timestamp=timestamp,
+            automatic=True,
+            trigger="live_chunk_threshold",
+        )
+
+    async def _publish_follow_up_questions(
+        self,
+        *,
+        questions,
+        candidate_text,
+        context,
+        timestamp,
+        automatic,
+        trigger,
+    ):
+        logger.info(
+            "Emitting follow-up questions for interview %s: %s",
+            self.interview_id,
+            questions,
+        )
+        cache.set(
+            follow_up_cache_key(self.interview_id),
+            {
+                "questions": questions,
+                "candidate_text": candidate_text,
+                "timestamp": timestamp,
+            },
+            FOLLOW_UP_CACHE_TTL,
+        )
+        await self._broadcast_event(
+            event_type="follow_up_questions",
+            payload={
+                "questions": questions,
+                "candidate_text": candidate_text,
+                "context": context,
+                "interview_id": str(self.interview_id),
+                "timestamp": timestamp,
+                "automatic": automatic,
+                "trigger": trigger,
+            },
+        )
+
+    @database_sync_to_async
+    def _user_can_access(self, user):
+        from apps.interview.models import Interview
+
+        interview = (
+            Interview.objects
+            .select_related("candidate__user", "job__posted_by__user")
+            .filter(pk=self.interview_id)
+            .first()
+        )
+        if interview is None:
+            return False
+
+        if getattr(user, "is_staff", False) or getattr(user, "is_superuser", False):
+            return True
+
+        candidate = interview.candidate
+        if candidate and candidate.user_id == user.id:
+            return True
+
+        job = interview.job
+        if job and job.posted_by and job.posted_by.user_id == user.id:
+            return True
+
+        return False
+
+    @database_sync_to_async
+    def _start_live_session(self):
+        from apps.interview.models import Interview, InterviewConversation
+
+        interview = Interview.objects.filter(pk=self.interview_id).first()
+        if interview is None:
+            logger.warning("Interview %s not found while starting live session", self.interview_id)
+            return 0
+
+        deleted_count, _ = InterviewConversation.objects.filter(
+            interview_id=self.interview_id,
+        ).delete()
+        cache.delete(follow_up_cache_key(self.interview_id))
+
+        interview.status = Interview.Status.IN_PROGRESS
+        interview.bot_join_status = Interview.BotJoinStatus.JOINED
+        interview.save(update_fields=["status", "bot_join_status", "updated_at"])
+        return deleted_count
+
+    @database_sync_to_async
+    def _mark_bot_joined(self):
+        from apps.interview.models import Interview
+
+        interview = Interview.objects.filter(pk=self.interview_id).first()
+        if interview is None:
+            return
+        interview.bot_join_status = Interview.BotJoinStatus.JOINED
+        if interview.status != Interview.Status.IN_PROGRESS:
+            interview.status = Interview.Status.IN_PROGRESS
+            interview.save(update_fields=["status", "bot_join_status", "updated_at"])
+        else:
+            interview.save(update_fields=["bot_join_status", "updated_at"])
 
     @database_sync_to_async
     def _save_transcript(self, speaker, text, timestamp):
