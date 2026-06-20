@@ -155,62 +155,164 @@ class ActivityLogViewSet(viewsets.ModelViewSet):
         return ActivityLog.objects.none()
 
 
+# class VideoUploadView(APIView):
+#     permission_classes = [permissions.IsAuthenticated]
+
+#     def post(self, request, candidate_id):
+#         candidate = Candidate.objects.get(id=candidate_id)
+#         if hasattr(request.user, 'candidate_profile'):
+#             if candidate.user != request.user:
+#                 return Response({'error': 'Not your application.'}, status=403)
+#         else:
+#             return Response({'error': 'Only candidates can upload videos.'}, status=403)
+
+#         if candidate.video_intro_url:
+#             return Response({'error': 'Video already uploaded.'}, status=400)
+
+#         one_hour_ago = timezone.now() - timezone.timedelta(hours=1)
+        
+#         if candidate.video_attempts >= 5:
+#             if candidate.video_last_failed_attempt and candidate.video_last_failed_attempt > one_hour_ago:
+#                 wait_minutes = 60 - ((timezone.now() - candidate.video_last_failed_attempt).seconds // 60)
+#                 return Response(
+#                     {'error': f'Too many failed attempts. Please try again in {wait_minutes} minutes.'},
+#                     status=status.HTTP_429_TOO_MANY_REQUESTS
+#                 )
+#             else:
+#                 candidate.video_attempts = 0
+#                 candidate.video_last_failed_attempt = None
+#                 candidate.save(update_fields=['video_attempts', 'video_last_failed_attempt'])
+
+#         upload_success = True  
+        
+#         if upload_success:
+#             candidate.video_intro_url = "https://stream.example.com/video-id"  
+#             candidate.video_uploaded_at = timezone.now()
+#             candidate.video_attempts = 0
+#             candidate.video_last_failed_attempt = None
+#             candidate.save()
+            
+#             ActivityLog.objects.create(
+#                 candidate=candidate,
+#                 event_type=ActivityLog.EventType.VIDEO_UPLOADED,
+#                 note="Video uploaded successfully",
+#                 created_by_type=ActivityLog.CreatedByType.CANDIDATE,
+#                 created_by_id=None,
+#             )
+            
+#             return Response({'message': 'Video uploaded successfully'}, status=200)
+#         else:
+#             candidate.video_attempts += 1
+#             candidate.video_last_failed_attempt = timezone.now()
+#             candidate.save(update_fields=['video_attempts', 'video_last_failed_attempt'])
+            
+#             remaining = 5 - candidate.video_attempts
+#             return Response(
+#                 {'error': f'Upload failed. {remaining} attempts remaining.'},
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+
+
+
+
 class VideoUploadView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, candidate_id):
-        candidate = Candidate.objects.get(id=candidate_id)
+        try:
+            candidate = Candidate.objects.select_related('user', 'job__posted_by').get(id=candidate_id)
+        except Candidate.DoesNotExist:
+            return Response({'error': 'Application not found.'}, status=404)
+
         if hasattr(request.user, 'candidate_profile'):
             if candidate.user != request.user:
                 return Response({'error': 'Not your application.'}, status=403)
         else:
             return Response({'error': 'Only candidates can upload videos.'}, status=403)
 
-        if candidate.video_intro_url:
-            return Response({'error': 'Video already uploaded.'}, status=400)
-
-        one_hour_ago = timezone.now() - timezone.timedelta(hours=1)
+        file_extension = request.data.get('file_extension', 'mp4').lower()
         
-        if candidate.video_attempts >= 5:
-            if candidate.video_last_failed_attempt and candidate.video_last_failed_attempt > one_hour_ago:
-                wait_minutes = 60 - ((timezone.now() - candidate.video_last_failed_attempt).seconds // 60)
-                return Response(
-                    {'error': f'Too many failed attempts. Please try again in {wait_minutes} minutes.'},
-                    status=status.HTTP_429_TOO_MANY_REQUESTS
-                )
-            else:
-                candidate.video_attempts = 0
-                candidate.video_last_failed_attempt = None
-                candidate.save(update_fields=['video_attempts', 'video_last_failed_attempt'])
+        allowed_formats = ['mp4', 'webm', 'mov']
+        if file_extension not in allowed_formats:
+            return Response({'error': 'Only MP4, WebM, and MOV files are supported.'}, status=400)
 
-        upload_success = True  
+        content_type_map = {
+            'mp4': 'video/mp4',
+            'webm': 'video/webm',
+            'mov': 'video/quicktime',
+        }
+        content_type = content_type_map.get(file_extension, 'video/mp4')
+
+        file_key = f'video/{candidate_id}/{uuid.uuid4()}.{file_extension}'
         
-        if upload_success:
-            candidate.video_intro_url = "https://stream.example.com/video-id"  
+        signed_url = generate_signed_url(
+            file_key,
+            method='put_object',
+            expires_in=900,
+            content_type=content_type
+        )
+        
+        return Response({
+            'upload_url': signed_url,
+            'file_key': file_key,
+            'content_type': content_type,
+        })
+
+
+class VideoUploadConfirmView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, candidate_id):
+        try:
+            candidate = Candidate.objects.select_related('user', 'job__posted_by').get(id=candidate_id)
+        except Candidate.DoesNotExist:
+            return Response({'error': 'Application not found.'}, status=404)
+
+        if hasattr(request.user, 'candidate_profile'):
+            if candidate.user != request.user:
+                return Response({'error': 'Not your application.'}, status=403)
+        else:
+            return Response({'error': 'Only candidates can upload videos.'}, status=403)
+
+        file_key = request.data.get('file_key')
+        filename = request.data.get('filename', 'video.mp4')
+        
+        if not file_key:
+            return Response({'error': 'file_key required'}, status=400)
+
+        try:
+            preview_url = generate_signed_url(
+                file_key,
+                method='get_object',
+                expires_in=3600,
+                response_content_disposition=f'inline; filename="{filename}"'
+            )
+
+            candidate.video_intro_url = preview_url
             candidate.video_uploaded_at = timezone.now()
             candidate.video_attempts = 0
             candidate.video_last_failed_attempt = None
             candidate.save()
-            
+
             ActivityLog.objects.create(
                 candidate=candidate,
                 event_type=ActivityLog.EventType.VIDEO_UPLOADED,
-                note="Video uploaded successfully",
+                note=f"Video uploaded: {filename}",
                 created_by_type=ActivityLog.CreatedByType.CANDIDATE,
-                created_by_id=None,
+                created_by_id=request.user.id,
             )
-            
-            return Response({'message': 'Video uploaded successfully'}, status=200)
-        else:
-            candidate.video_attempts += 1
-            candidate.video_last_failed_attempt = timezone.now()
-            candidate.save(update_fields=['video_attempts', 'video_last_failed_attempt'])
-            
-            remaining = 5 - candidate.video_attempts
-            return Response(
-                {'error': f'Upload failed. {remaining} attempts remaining.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+
+            return Response({
+                'message': 'Video uploaded successfully',
+                'video_url': preview_url
+            }, status=200)
+
+        except Exception as e:
+            logger.error(f"Video confirm failed: {e}", exc_info=True)
+            return Response({'error': f'Failed to save video: {str(e)}'}, status=500)
+
+
+
 
 class CVUploadURLView(APIView):
     permission_classes = [IsAuthenticated]

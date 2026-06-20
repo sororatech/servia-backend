@@ -184,9 +184,9 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.UserRateThrottle',  
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '100/day',       
-        'user': '1000/day',         
-        'bulk_update': '10/min',    
+        'anon': '1000/day',       
+        'user': '10000/day',         
+        'bulk_update': '100/min',    
     }, 
 }
 SPECTACULAR_SETTINGS = {
