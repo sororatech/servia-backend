@@ -254,3 +254,5 @@ class Job(models.Model):
             deleted_at__isnull=True
         ).count()
         return max(0, self.openings_count - hired_count)
+
+  
