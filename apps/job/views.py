@@ -20,7 +20,6 @@ class JobViewSet(viewsets.ModelViewSet):
             shortlisted_count=Count('candidate', filter=Q(candidate__status='shortlisted')),
         ).select_related('posted_by__user').order_by('-created_at')
         
-        # Public filter: active + not soft-deleted + deadline not passed (or no deadline set)
         public_filter = (
             Q(is_active=True) & 
             Q(deleted_at__isnull=True) & 
@@ -32,7 +31,7 @@ class JobViewSet(viewsets.ModelViewSet):
         
         # Recruiters: see their own jobs + public jobs
         return queryset.filter(
-            Q(posted_by__user__id=user.id) | public_filter
+            Q(posted_by=user.recruiter_profile) | public_filter
         )
     
     def get_serializer_class(self):

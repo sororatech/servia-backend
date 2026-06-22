@@ -29,7 +29,10 @@ from apps.job.models import Job
 from apps.candidate.models import Candidate
 from .models import CandidateUser, RecruiterUser
 from .serializers import CandidateUserSerializer, RecruiterUserSerializer
-from apps.users.tasks import send_welcome_email, send_password_reset_email, send_recruiter_credentials_email
+from apps.users.tasks import send_welcome_email, send_password_reset_email, send_verification_email, send_recruiter_credentials_email
+from rest_framework.throttling import UserRateThrottle
+from apps.interview.models import Interview
+from django.db.models import Count, Avg
 from django.utils.crypto import get_random_string
 from .permissions import IsAdminRecruiter
 
@@ -37,7 +40,8 @@ from .permissions import IsAdminRecruiter
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
-
+class LoginThrottle(UserRateThrottle):
+    scope = 'login'
 
 
 class CandidateUserViewSet(viewsets.ModelViewSet):
@@ -49,8 +53,6 @@ class CandidateUserViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAdminUser]
 
 
-
-
 class RecruiterUserViewSet(viewsets.ModelViewSet):
     """
     ViewSet for recruiter profiles. Only admin users can list/create.
@@ -60,28 +62,24 @@ class RecruiterUserViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAdminUser]
 
 
-
-
 class CustomAuthToken(APIView):
     """
     Custom login endpoint that accepts email/password and returns a token.
     Uses Django's authenticate with username=email (since we set username to email).
     """
+    throttle_classes = [LoginThrottle]
     permission_classes = []
     authentication_classes = []
-
 
     def post(self, request):
         email = request.data.get('email')
         password = request.data.get('password')
-
 
         if not email or not password:
             return Response(
                 {'error': 'Email and password are required.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
 
         user = authenticate(request, username=email, password=password)
         if user is None:
@@ -97,7 +95,6 @@ class CustomAuthToken(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-
         user_type = None
         if hasattr(user, 'candidate_profile'):
             user_type = 'candidate'
@@ -106,13 +103,13 @@ class CustomAuthToken(APIView):
         else:
             user_type = 'recruiter'
 
-
         token, _ = Token.objects.get_or_create(user=user)
         is_admin = False
         if hasattr(user, 'recruiter_profile') and user.recruiter_profile.role == RecruiterUser.Role.ADMIN:
             is_admin = True
+        
         response = Response({
-            'user_id': user.id,
+            'user_id': str(user.id),
             'user_type': user_type,
             'token': token.key,
             'email': user.email,
@@ -120,7 +117,6 @@ class CustomAuthToken(APIView):
             'last_name': user.last_name,
             'is_admin': is_admin,
         }, status=status.HTTP_200_OK)
-
 
         response.set_cookie(
             key='auth_token',
@@ -132,7 +128,6 @@ class CustomAuthToken(APIView):
             path='/',
         )
 
-
         response.set_cookie(
             key='user_role',
             value=user_type,
@@ -143,10 +138,7 @@ class CustomAuthToken(APIView):
             path='/',
         )
 
-
         return response
-
-
 
 
 class CandidateRegistrationView(APIView):
@@ -157,7 +149,6 @@ class CandidateRegistrationView(APIView):
     permission_classes = []
     authentication_classes = []
 
-
     def post(self, request):
         serializer = CandidateUserSerializer(data=request.data)
         if serializer.is_valid():
@@ -167,15 +158,15 @@ class CandidateRegistrationView(APIView):
                 user.is_active = False
                 user.save()
 
-
                 token, _ = Token.objects.get_or_create(user=user)
                
                 verification_code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
-                print(f"\n🔐 VERIFICATION CODE for {user.email}: {verification_code}\n") 
                 cache.set(f'verify_email_{user.email}', verification_code, timeout=600)
+
+                send_verification_email.delay(user.email, verification_code, user.first_name or user.email)
+                logger.info(f"Verification code for {user.email}")
                 
                 send_welcome_email.delay(user.id)
-
 
                 response = Response({
                     'user_id': user.id,
@@ -185,7 +176,6 @@ class CandidateRegistrationView(APIView):
                     'last_name': user.last_name,
                     'message': 'Please verify your email to activate your account'
                 }, status=status.HTTP_201_CREATED)
-
 
                 response.set_cookie(
                     key='auth_token',
@@ -206,9 +196,7 @@ class CandidateRegistrationView(APIView):
                     path='/',
                 )
 
-
                 return response
-
 
             except IntegrityError as e:
                 if 'duplicate key value violates unique constraint "auth_user_username_key"' in str(e):
@@ -217,7 +205,6 @@ class CandidateRegistrationView(APIView):
                         if existing_user.date_joined and (timezone.now() - existing_user.date_joined) > timedelta(hours=2):
                             existing_user.delete()
 
-
                             serializer = CandidateUserSerializer(data=request.data)
                             if serializer.is_valid():
                                 candidate = serializer.save()
@@ -225,16 +212,15 @@ class CandidateRegistrationView(APIView):
                                 user.is_active = False
                                 user.save()
 
-
                                 verification_code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
                                 cache.set(f'verify_email_{user.email}', verification_code, timeout=600)
 
+                                send_verification_email.delay(user.email, verification_code, user.first_name or user.email)
+                                logger.info(f"Verification code for {user.email}")
 
                                 send_welcome_email.delay(user.id)
 
-
                                 token, _ = Token.objects.get_or_create(user=user)
-
 
                                 response = Response({
                                     'user_id': user.id,
@@ -244,7 +230,6 @@ class CandidateRegistrationView(APIView):
                                     'last_name': user.last_name,
                                     'message': 'Please verify your email to activate your account'
                                 }, status=status.HTTP_201_CREATED)
-
 
                                 response.set_cookie(
                                     key='auth_token',
@@ -265,9 +250,7 @@ class CandidateRegistrationView(APIView):
                                     path='/',
                                 )
 
-
                                 return response
-
 
                     return Response(
                         {'error': 'A user with this email already exists.'},
@@ -276,15 +259,12 @@ class CandidateRegistrationView(APIView):
                 raise e
 
 
-
-
 class RecruiterCreateView(APIView):
     """
     Only admin recruiters can create recruiter accounts.
     Generates a random password and emails it to the new recruiter.
     """
     permission_classes = [IsAdminRecruiter]
-
 
     def post(self, request):
         data = request.data
@@ -325,14 +305,11 @@ class RecruiterCreateView(APIView):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
-
-
 class LogoutView(APIView):
     """
     Logout endpoint that deletes the auth token and clears cookies.
     """
     permission_classes = [IsAuthenticated]
-
 
     def post(self, request):
         try:
@@ -340,17 +317,13 @@ class LogoutView(APIView):
         except (AttributeError, Token.DoesNotExist):
             pass
 
-
         response = Response({'detail': 'Logged out successfully'}, status=status.HTTP_200_OK)
         response.delete_cookie('auth_token', path='/')
         response.delete_cookie('user_role', path='/')
         return response
 
-
     def options(self, request, *args, **kwargs):
         return Response(status=status.HTTP_200_OK)
-
-
 
 
 class PasswordResetRequestView(views.APIView):
@@ -385,8 +358,6 @@ class PasswordResetRequestView(views.APIView):
             {'message': 'If an account exists with this email, you will receive a password reset link.'},
             status=status.HTTP_200_OK
         )
-
-
 
 
 class PasswordResetConfirmView(views.APIView):
@@ -428,8 +399,6 @@ class PasswordResetConfirmView(views.APIView):
             {'message': 'Password has been reset successfully'},
             status=status.HTTP_200_OK
         )
-
-
 
 
 class VerifyEmailView(APIView):
@@ -506,8 +475,10 @@ class ResendVerificationView(APIView):
             )
        
         code = ''.join([str(random.randint(0, 9)) for _ in range(6)])
-        print(f"\n🔐 RESENT VERIFICATION CODE for {email}: {code}\n") 
         cache.set(f'verify_email_{email}', code, timeout=600)
+        
+        send_verification_email.delay(email, code, user.first_name or email)
+        logger.info(f"Verification code for {email}")
         
         return Response(
             {'message': 'Verification code sent'},
@@ -522,7 +493,6 @@ class UserProfileDetailView(APIView):
     PATCH: updates user fields + profile fields (phone, location, department)
     """
     permission_classes = [IsAuthenticated]
-
 
     def get(self, request):
         user = request.user
@@ -543,7 +513,6 @@ class UserProfileDetailView(APIView):
             profile = user.recruiter_profile
         else:
             return Response({'error': 'Profile not found'}, status=404)
-
 
         data = {
             'id': user.id,
@@ -568,11 +537,9 @@ class UserProfileDetailView(APIView):
         data['avatar_url'] = avatar_url
         return Response(data)
 
-
     def patch(self, request):
         user = request.user
         data = request.data
-
 
         if 'email' in data and data['email'] != user.email:
             if User.objects.filter(email=data['email']).exclude(id=user.id).exists():
@@ -582,23 +549,19 @@ class UserProfileDetailView(APIView):
             except ValidationError:
                 return Response({'error': 'Invalid email format.'}, status=status.HTTP_400_BAD_REQUEST)
 
-
         if 'phone' in data and data['phone']:
             phone_regex = r'^[\+\d\s\-\(\)]{8,20}$'
             if not re.match(phone_regex, data['phone']):
                 return Response({'error': 'Invalid phone number format. Use international format (e.g., +251911223344).'}, status=400)
 
-
         if 'location' in data and data['location'] and len(data['location'].strip()) < 2:
             return Response({'error': 'Location must be at least 2 characters.'}, status=400)
-
 
         user_fields = ['first_name', 'last_name', 'email']
         for field in user_fields:
             if field in data:
                 setattr(user, field, data[field])
         user.save()
-
 
         if hasattr(user, 'candidate_profile'):
             profile = user.candidate_profile
@@ -615,32 +578,26 @@ class UserProfileDetailView(APIView):
                     setattr(profile, field, data[field])
             profile.save()
 
-
         return self.get(request)
 
 
 class ChangePasswordView(APIView):
     permission_classes = [IsAuthenticated]
 
-
     def post(self, request):
         old_password = request.data.get('old_password')
         new_password1 = request.data.get('new_password1')
         new_password2 = request.data.get('new_password2')
 
-
         if not old_password or not new_password1 or not new_password2:
             return Response({'error': 'All password fields are required'}, status=400)
-
 
         if new_password1 != new_password2:
             return Response({'error': 'New passwords do not match'}, status=400)
 
-
         user = request.user
         if not user.check_password(old_password):
             return Response({'error': 'Old password is incorrect'}, status=400)
-
 
         errors = []
         if len(new_password1) < 8:
@@ -654,7 +611,6 @@ class ChangePasswordView(APIView):
         if not re.search(r'[^A-Za-z0-9]', new_password1):
             errors.append('Password must contain at least one special character.')
 
-
         if errors:
             return Response({'error': errors}, status=400)
         try:
@@ -662,15 +618,14 @@ class ChangePasswordView(APIView):
         except ValidationError as e:
             return Response({'error': e.messages}, status=400)
 
-
         user.set_password(new_password1)
         user.save()
 
-
         return Response({'message': 'Password changed successfully'}, status=200)
+
+
 class AvatarUploadURLView(APIView):
     permission_classes = [IsAuthenticated]
-
 
     def post(self, request):
         file_extension = request.data.get('file_extension', 'jpg').lower()
@@ -678,13 +633,11 @@ class AvatarUploadURLView(APIView):
         if file_extension not in allowed:
             return Response({'error': 'Unsupported file format.'}, status=400)
 
-
         content_type_map = {
             'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'png': 'image/png',
             'gif': 'image/gif', 'webp': 'image/webp'
         }
         content_type = content_type_map.get(file_extension)
-
 
         user = request.user
         file_key = f'avatars/{user.id}/{uuid.uuid4()}.{file_extension}'
@@ -695,12 +648,10 @@ class AvatarUploadURLView(APIView):
 class AvatarUploadConfirmView(APIView):
     permission_classes = [IsAuthenticated]
 
-
     def post(self, request):
         file_key = request.data.get('file_key')
         if not file_key:
             return Response({'error': 'file_key required'}, status=400)
-
 
         user = request.user
         if hasattr(user, 'candidate_profile'):
@@ -710,7 +661,6 @@ class AvatarUploadConfirmView(APIView):
         else:
             return Response({'error': 'Profile not found'}, status=404)
 
-
         profile.profile_photo = file_key
         profile.save(update_fields=['profile_photo'])
         return Response({'message': 'Avatar updated successfully', 'file_key': file_key})
@@ -719,16 +669,13 @@ class AvatarUploadConfirmView(APIView):
 class RecruiterStatsView(APIView):
     permission_classes = [IsAuthenticated]
 
-
     def get(self, request):
         user = request.user
         if not hasattr(user, 'recruiter_profile'):
             return Response({'error': 'Recruiter profile not found'}, status=404)
 
-
         recruiter = user.recruiter_profile
         now = timezone.now()
-
 
         jobs = Job.objects.filter(
             posted_by=recruiter,
@@ -736,16 +683,12 @@ class RecruiterStatsView(APIView):
             deleted_at__isnull=True
         ).filter(Q(application_deadline__isnull=True) | Q(application_deadline__gt=now))
 
-
         total_jobs = jobs.count()
-
 
         candidates = Candidate.objects.filter(job__in=jobs, deleted_at__isnull=True)
         total_candidates = candidates.count()
 
-
         pending_review = candidates.filter(status__in=['applied', 'screened']).count()
-
 
         return Response({
             'total_jobs': total_jobs,

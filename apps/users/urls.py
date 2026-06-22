@@ -15,6 +15,7 @@ urlpatterns = [
     path('password-reset/confirm/', views.PasswordResetConfirmView.as_view(), name='password-reset-confirm'),
     path('verify-email/', views.VerifyEmailView.as_view(), name='verify-email'),
     path('resend-verification/', views.ResendVerificationView.as_view(), name='resend-verification'),
+    path('recruiters/me/stats/', views.RecruiterStatsView.as_view(), name='recruiter-stats'),
     path('profile/', views.UserProfileDetailView.as_view(), name='user-profile'),
     path('me/', views.UserProfileDetailView.as_view(), name='user-profile'), 
     path('users/me/', views.UserProfileDetailView.as_view(), name='user-profile'),

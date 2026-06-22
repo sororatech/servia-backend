@@ -164,16 +164,6 @@ class CandidateViewSet(viewsets.ModelViewSet):
                     'status': existing.status
                 }, status=status.HTTP_200_OK)
 
-        return super().create(request, *args, **kwargs)
-
-    def perform_create(self, serializer):
-        user = self.request.user
-        if hasattr(user, 'candidate_profile'):
-            serializer.save(user=user)
-        else:
-            raise PermissionDenied("Only candidates can create applications.")
-
-    def create(self, request, *args, **kwargs):
         if not hasattr(request.user, 'candidate_profile'):
             raise PermissionDenied("Only candidates can create applications.")
 
@@ -261,11 +251,12 @@ class CandidateViewSet(viewsets.ModelViewSet):
             Candidate.Status.WITHDRAWN: ActivityLog.EventType.WITHDRAWN,
         }
         return status_map.get(status, None)
+
 class ActivityLogViewSet(viewsets.ModelViewSet):
     serializer_class = ActivityLogSerializer
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ['get']
-    queryset = ActivityLog.objects.none()      
+    queryset = ActivityLog.objects.none()
 
     def get_queryset(self):
         user = self.request.user
@@ -373,8 +364,6 @@ class VideoUploadConfirmView(APIView):
             return Response({'error': f'Failed to save video: {str(e)}'}, status=500)
 
 
-
-
 class CVUploadURLView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -406,18 +395,6 @@ class CVUploadURLView(APIView):
 
         file_key = f'cv/{candidate_id}/{uuid.uuid4()}.{file_extension}'
         
-        signed_url = generate_signed_url(
-            file_key, 
-            method='put_object', 
-            expires_in=900,  
-            content_type=content_type 
-        )
-        
-        return Response({
-            'upload_url': signed_url, 
-            'file_key': file_key,
-            'content_type': content_type,  
-        })
         file_size = request.data.get('file_size', 0)
         max_size = getattr(settings, 'MAX_CV_SIZE_MB', 10) * 1024 * 1024
 
@@ -429,14 +406,16 @@ class CVUploadURLView(APIView):
         signed_url = generate_signed_url(
             file_key,
             method='put_object',
-            expires_in=900,          
+            expires_in=900,
             content_type=content_type
         )
+        
         return Response({
             'upload_url': signed_url,
             'file_key': file_key,
             'content_type': content_type,
         })
+
 class CVUploadConfirmView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -571,6 +550,7 @@ class CVUploadConfirmView(APIView):
                 {'error': 'Failed to process CV. Please try again.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
 class CVPreviewURLView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -594,6 +574,7 @@ class CVPreviewURLView(APIView):
             response_content_disposition=f'inline; filename="{candidate.cv_filename}"'
         )
         return Response({'preview_url': url})
+
 class MyApplicationsViewSet(viewsets.ModelViewSet):
     """
     ViewSet for candidates to view their own applications.
@@ -603,9 +584,9 @@ class MyApplicationsViewSet(viewsets.ModelViewSet):
     serializer_class = MyApplicationSerializer
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ['get', 'head', 'options']
+    
     def get_queryset(self):
         user = self.request.user
-     
         if hasattr(user, 'candidate_profile'):
             return Candidate.objects.filter(
                 user=user,

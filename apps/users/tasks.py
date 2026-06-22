@@ -243,14 +243,12 @@ def send_password_reset_email(user_email, reset_url):
     user_name = ""
     try:
         user = User.objects.get(email=user_email)
-        # Handle both CandidateUser and RecruiterUser models
         if hasattr(user, 'first_name') and user.first_name:
             user_name = user.first_name
         elif hasattr(user, 'name') and user.name:
             user_name = user.name
     except User.DoesNotExist:
         logger.warning(f"Password reset requested for non-existent email: {user_email}")
-        # Still try to send email? No, return silently for security
     
     try:
         context = {
@@ -321,6 +319,29 @@ def cleanup_unverified_users():
         return 0
 
 
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def send_verification_email(self, user_email, verification_code, user_name=""):
+    """Send verification code email with retry logic."""
+    try:
+        context = {
+            'user_name': user_name,
+            'verification_code': verification_code,
+        }
+        html_message = render_to_string('email/verification_code.html', context)
+        send_mail(
+            subject="Verify Your ServiaAI Account",
+            message=f'Your verification code is: {verification_code}',
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user_email],
+            html_message=html_message,
+            fail_silently=False,
+        )
+        logger.info(f"Verification email sent to {user_email}")
+    except Exception as e:
+        logger.error(f"Failed to send verification email to {user_email}: {str(e)}", exc_info=True)
+        raise self.retry(exc=e, countdown=60 * (2 ** self.request.retries))
+
+
 @shared_task
 def check_system_health():
     key_date = timezone.now().strftime('%Y-%m-%d')
@@ -329,14 +350,13 @@ def check_system_health():
     
     try:
         start = time.time()
-        r = requests.get(health_url, timeout=10)  
+        r = requests.get(health_url, timeout=10)
         key = f"health_ok_{key_date}" if r.status_code == 200 else f"health_fail_{key_date}"
         if not SystemMetric.objects.filter(key=key).update(value=F('value') + 1):
             SystemMetric.objects.create(key=key, value=1)
-        logger.info(f"✓ Health check logged: {key}")  
+        logger.info(f"✓ Health check logged: {key}")
     except Exception as e:
         key = f"health_fail_{key_date}"
         if not SystemMetric.objects.filter(key=key).update(value=F('value') + 1):
             SystemMetric.objects.create(key=key, value=1)
-        logger.error(f"✗ Health check failed: {e}")  
- 
+        logger.error(f"✗ Health check failed: {e}")

@@ -154,6 +154,7 @@ def _filter_event(event, hint):
             'id': event['user'].get('id'),  
         }
     return event
+
 CORS_ALLOW_ALL_ORIGINS = os.getenv('CORS_ALLOW_ALL_ORIGINS', 'False') == 'True'
 
 cors_allowed_raw = os.getenv('CORS_ALLOWED_ORIGINS', '')
@@ -181,6 +182,7 @@ REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'EXCEPTION_HANDLER': 'apps.users.exceptions.custom_exception_handler',
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle',
         'rest_framework.throttling.UserRateThrottle',
@@ -197,6 +199,7 @@ REST_FRAMEWORK = {
 # Disable global throttling in local dev so hot-reload + polling don't 429.
 if DEBUG:
     REST_FRAMEWORK['DEFAULT_THROTTLE_CLASSES'] = []
+
 SPECTACULAR_SETTINGS = {
     'TITLE': 'ServiaAI API',
     'DESCRIPTION': 'AI-powered hospitality recruitment platform',
@@ -219,6 +222,19 @@ if not all([CLOUDFLARE_R2_ACCESS_KEY, CLOUDFLARE_R2_SECRET_KEY, CLOUDFLARE_R2_EN
 MAX_CV_SIZE_MB = 10
 MAX_VIDEO_SIZE_MB = 50
 MAX_VIDEO_DURATION_SECONDS = 120
+
+
+# Email Configuration (Brevo SMTP)
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+# EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp-relay.brevo.com')
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', 587))
+EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True') == 'True'
+EMAIL_USE_SSL = False
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD')
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'misginameaza@gmail.com')
+
 
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
 
