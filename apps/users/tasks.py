@@ -267,7 +267,32 @@ def send_password_reset_email(user_email, reset_url):
         logger.info(f"Password reset email sent to {user_email}")
     except Exception as e:
         logger.error(f"Failed to send password reset email to {user_email}: {str(e)}")
-
+@shared_task
+def send_recruiter_credentials_email(recruiter_email, password, first_name=None):
+    """
+    Send email with login credentials to newly created recruiter.
+    """
+    try:
+        base_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+        login_url = f"{base_url}/login"
+        context = {
+            'email': recruiter_email,
+            'password': password,
+            'login_url': login_url,
+            'first_name': first_name or 'Recruiter',
+        }
+        html_message = render_to_string('email/recruiter_credentials.html', context)
+        send_mail(
+            subject='Your Recruiter Account for ServiaAI',
+            message='',
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[recruiter_email],
+            html_message=html_message,
+            fail_silently=False,
+        )
+        logger.info(f"Credentials email sent to recruiter {recruiter_email}")
+    except Exception as e:
+        logger.error(f"Failed to send credentials email to {recruiter_email}: {str(e)}")
 
 @shared_task
 def cleanup_unverified_users():

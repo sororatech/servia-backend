@@ -5,7 +5,7 @@ class InterviewSerializer(serializers.ModelSerializer):
     class Meta:
         model = Interview
         fields = '__all__'
-        read_only_fields = ['id', 'created_at', 'updated_at', 'meet_link', 'calendar_event_id']
+        read_only_fields = ['id', 'created_at', 'updated_at', 'calendar_event_id']
 
 class InterviewConversationSerializer(serializers.ModelSerializer):
     class Meta:

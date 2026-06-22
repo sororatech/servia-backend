@@ -1,4 +1,4 @@
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, permissions
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -8,7 +8,6 @@ from .models import Job
 from .serializers import JobSerializer, JobCreateSerializer
 from apps.users.permissions import IsRecruiter
 
-
 class JobViewSet(viewsets.ModelViewSet):
     """
     ViewSet for managing job postings.
@@ -17,7 +16,8 @@ class JobViewSet(viewsets.ModelViewSet):
         user = self.request.user
         now = timezone.now()
         queryset = Job.objects.annotate(
-            candidate_count=Count('candidate', filter=Q(candidate__deleted_at__isnull=True))
+            candidate_count=Count('candidate'),
+            shortlisted_count=Count('candidate', filter=Q(candidate__status='shortlisted')),
         ).select_related('posted_by__user').order_by('-created_at')
         
         public_filter = (
@@ -48,19 +48,12 @@ class JobViewSet(viewsets.ModelViewSet):
         return [AllowAny()]
     
     def perform_create(self, serializer):
-        """
-        CRITICAL FIX: Set posted_by using correct attribute name.
-        Model uses related_name='recruiter_profile', not 'recruiteruser'.
-        """
-        if hasattr(self.request.user, 'recruiter_profile'): 
-            serializer.save(posted_by=self.request.user.recruiter_profile)  
+        if hasattr(self.request.user, 'recruiter_profile'):
+            serializer.save(posted_by=self.request.user.recruiter_profile)
         else:
             serializer.save()
     
     def create(self, request, *args, **kwargs):
-        """
-        Override create to capture warnings BEFORE saving.
-        """
         serializer = self.get_serializer(
             data=request.data,
             context={'request': request}

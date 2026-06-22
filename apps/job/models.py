@@ -129,6 +129,13 @@ class Job(models.Model):
         MASTER = 'master', 'Master\'s Degree (MBA / Hospitality Management)'
         PROFESSIONAL_CERT = 'professional_cert', 'Professional Certification (e.g., CHA, CHT)'
 
+    class SalaryPeriod(models.TextChoices):
+        HOURLY = 'hourly', 'Hourly'
+        DAILY = 'daily', 'Daily'
+        WEEKLY = 'weekly', 'Weekly'
+        MONTHLY = 'monthly', 'Monthly'
+        YEARLY = 'yearly', 'Yearly'
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     title = models.CharField(max_length=200, db_index=True)
     description = models.TextField()
@@ -145,27 +152,27 @@ class Job(models.Model):
     employment_type = models.CharField(max_length=20, choices=EmploymentType.choices, db_index=True)
     location = models.CharField(max_length=200, db_index=True)
     
-    openings_count = models.IntegerField(
+    openings_count = models.PositiveIntegerField(
         default=1,
         help_text="Number of positions available for this job"
     )
-    
+
     salary_min = models.DecimalField(
-        max_digits=10,
+        max_digits=12,
         decimal_places=2,
         null=True,
         blank=True,
         help_text="Minimum salary for this position"
     )
     salary_max = models.DecimalField(
-        max_digits=10,
+        max_digits=12,
         decimal_places=2,
         null=True,
         blank=True,
         help_text="Maximum salary for this position"
     )
     salary_currency = models.CharField(
-        max_length=3,
+        max_length=10,
         default='ETB',
         choices=[
             ('ETB', 'Ethiopian Birr'),
@@ -178,17 +185,11 @@ class Job(models.Model):
     )
     salary_period = models.CharField(
         max_length=20,
-        default='monthly',
-        choices=[
-            ('hourly', 'Per Hour'),
-            ('daily', 'Per Day'),
-            ('weekly', 'Per Week'),
-            ('monthly', 'Per Month'),
-            ('yearly', 'Per Year'),
-        ],
+        default=SalaryPeriod.MONTHLY,
+        choices=SalaryPeriod.choices,
         help_text="Period for salary"
     )
-    
+
     is_active = models.BooleanField(default=True, db_index=True)
     posted_by = models.ForeignKey(RecruiterUser, on_delete=models.SET_NULL, null=True, blank=True, db_index=True)
     deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)

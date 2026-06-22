@@ -29,10 +29,12 @@ from apps.job.models import Job
 from apps.candidate.models import Candidate
 from .models import CandidateUser, RecruiterUser
 from .serializers import CandidateUserSerializer, RecruiterUserSerializer
-from apps.users.tasks import send_welcome_email, send_password_reset_email, send_verification_email
+from apps.users.tasks import send_welcome_email, send_password_reset_email, send_verification_email, send_recruiter_credentials_email
 from rest_framework.throttling import UserRateThrottle
 from apps.interview.models import Interview
 from django.db.models import Count, Avg
+from django.utils.crypto import get_random_string
+from .permissions import IsAdminRecruiter
 
 
 logger = logging.getLogger(__name__)
@@ -259,16 +261,48 @@ class CandidateRegistrationView(APIView):
 
 class RecruiterCreateView(APIView):
     """
-    Only admin users can create recruiter accounts.
+    Only admin recruiters can create recruiter accounts.
+    Generates a random password and emails it to the new recruiter.
     """
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [IsAdminRecruiter]
 
     def post(self, request):
-        serializer = RecruiterUserSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        data = request.data
+        email = data.get('email')
+        first_name = data.get('first_name', '')
+        last_name = data.get('last_name', '')
+        department = data.get('department', '')
+        role = data.get('role', RecruiterUser.Role.RECRUITER)
+
+        if not email:
+            return Response({'error': 'Email is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if User.objects.filter(email=email).exists():
+            return Response({'error': 'A user with this email already exists.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        password = get_random_string(length=12, allowed_chars='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()')
+
+        user = User.objects.create(
+            username=email,
+            email=email,
+            first_name=first_name,
+            last_name=last_name,
+            is_active=True,
+        )
+        user.set_password(password)
+        user.save()
+
+        recruiter = RecruiterUser.objects.create(
+            user=user,
+            department=department,
+            role=role,
+            is_active=True,
+        )
+
+        send_recruiter_credentials_email.delay(email, password, first_name or 'Recruiter')
+
+        serializer = RecruiterUserSerializer(recruiter)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 class LogoutView(APIView):

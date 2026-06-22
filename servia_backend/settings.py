@@ -18,6 +18,10 @@ DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', '*').split(',')
 
+# Local path to the servia-bot repo, used by InterviewViewSet.launch_bot to spin up
+# the Google Meet bot via `docker-compose` for local/dev environments only.
+SERVIA_BOT_DIR = os.getenv('SERVIA_BOT_DIR', '')
+
 INSTALLED_APPS = [
     'daphne',
     'django.contrib.admin',
@@ -180,15 +184,22 @@ REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'EXCEPTION_HANDLER': 'apps.users.exceptions.custom_exception_handler',
     'DEFAULT_THROTTLE_CLASSES': [
-        'rest_framework.throttling.AnonRateThrottle',   
-        'rest_framework.throttling.UserRateThrottle',  
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'anon': '1000/day',       
-        'user': '10000/day',         
-        'bulk_update': '100/min',    
-    }, 
+        # Per-minute limits — the old 1000/day cap was hit during normal dev
+        # (interviews page loads 4 paginated lists; live page polls every 5s).
+        'anon': '60/minute',
+        'user': '300/minute',
+        'bulk_update': '10/minute',
+    },
 }
+
+# Disable global throttling in local dev so hot-reload + polling don't 429.
+if DEBUG:
+    REST_FRAMEWORK['DEFAULT_THROTTLE_CLASSES'] = []
+
 SPECTACULAR_SETTINGS = {
     'TITLE': 'ServiaAI API',
     'DESCRIPTION': 'AI-powered hospitality recruitment platform',

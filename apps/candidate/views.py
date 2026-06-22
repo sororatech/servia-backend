@@ -1,6 +1,11 @@
 import uuid
 import logging
+import os
+import tempfile
+
+import requests
 from rest_framework import viewsets, permissions
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.exceptions import PermissionDenied
 from .models import Candidate, ActivityLog
 from .serializers import CandidateSerializer, ActivityLogSerializer, MyApplicationSerializer, VALID_TRANSITIONS
@@ -10,15 +15,17 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 from django.db import models
 from django.db.models import Q 
-from django.utils import timezone
 from django.conf import settings
-from apps.job.models import Job 
-from .services.storage import generate_signed_url
+from django.db import IntegrityError
+from django.utils import timezone
+from apps.job.models import Job
+from .services.storage import delete_file, generate_signed_url, upload_fileobj
 from apps.users.tasks import send_html_email
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.throttling import UserRateThrottle
 
 logger = logging.getLogger(__name__)
+
 
 def _check_upload_permission(candidate, user):
     """
@@ -29,21 +36,94 @@ def _check_upload_permission(candidate, user):
         if candidate.user != user:
             return False, 'You can only modify your own applications.'
         return True, None
-    
+
     elif hasattr(user, 'recruiter_profile'):
         if candidate.job.posted_by != user.recruiter_profile:
             return False, 'You do not have permission for this application.'
         return True, None
-    
+
     elif user.is_superuser:
         return True, None
-    
+
     return False, 'Unauthorized.'
+
+
+def process_candidate_cv(candidate, uploaded_file, actor):
+    filename = getattr(uploaded_file, 'name', '') or f'{candidate.id}.pdf'
+    file_extension = os.path.splitext(filename)[1].lower().lstrip('.')
+    allowed_formats = ['pdf', 'docx', 'png', 'jpg', 'jpeg']
+
+    if file_extension not in allowed_formats:
+        raise ValueError('Only PDF, DOCX, PNG, and JPG files are supported.')
+
+    file_size = getattr(uploaded_file, 'size', 0) or 0
+    max_size = settings.MAX_CV_SIZE_MB * 1024 * 1024
+    if file_size > max_size:
+        raise ValueError(f'CV file must be {settings.MAX_CV_SIZE_MB}MB or smaller.')
+
+    file_key = f'cv/{candidate.id}/{uuid.uuid4()}.{file_extension}'
+    content_type = getattr(uploaded_file, 'content_type', None) or 'application/octet-stream'
+
+    uploaded_file.seek(0)
+    upload_fileobj(uploaded_file, file_key, content_type=content_type)
+
+    uploaded_file.seek(0)
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_extension}') as tmp:
+        for chunk in uploaded_file.chunks():
+            tmp.write(chunk)
+        tmp_path = tmp.name
+
+    try:
+        from apps.candidate.services.text_extraction import extract_cv_text
+
+        extracted_text = extract_cv_text(tmp_path, file_extension)
+        if not extracted_text:
+            raise ValueError('Could not extract text from CV. Please upload a text-based PDF or DOCX.')
+
+        candidate.cv_file = file_key
+        candidate.cv_filename = filename
+        candidate.cv_uploaded_at = timezone.now()
+        candidate.cv_text = extracted_text
+        candidate.cv_status = Candidate.CVStatus.PROCESSING
+        candidate.save(update_fields=[
+            'cv_file', 'cv_filename', 'cv_uploaded_at', 'cv_text', 'cv_status', 'updated_at',
+        ])
+
+        job = candidate.job
+        job_description = (
+            f"Job Title: {job.title}\n\n"
+            f"Description:\n{job.description}\n\n"
+            f"Requirements:\n{job.requirements}"
+        )
+
+        from apps.ai_reports.tasks import analyze_cv_task
+        analyze_cv_task.delay(str(candidate.id), extracted_text, job_description)
+
+        ActivityLog.objects.create(
+            candidate=candidate,
+            event_type=ActivityLog.EventType.CV_UPLOADED,
+            note="CV uploaded and queued for AI analysis",
+            created_by_type=ActivityLog.CreatedByType.CANDIDATE,
+            created_by_id=actor.id,
+        )
+    except Exception:
+        try:
+            delete_file(file_key)
+        except Exception:
+            logger.exception("Failed to clean up uploaded CV for candidate %s", candidate.id)
+        candidate.cv_status = Candidate.CVStatus.ERROR
+        candidate.save(update_fields=['cv_status', 'updated_at'])
+        raise
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
 
 class CandidateViewSet(viewsets.ModelViewSet):
     serializer_class = CandidateSerializer
     permission_classes = [permissions.IsAuthenticated]
     queryset = Candidate.objects.none()
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
         user = self.request.user
@@ -84,14 +164,46 @@ class CandidateViewSet(viewsets.ModelViewSet):
                     'status': existing.status
                 }, status=status.HTTP_200_OK)
 
-        return super().create(request, *args, **kwargs)
-
-    def perform_create(self, serializer):
-        user = self.request.user
-        if hasattr(user, 'candidate_profile'):
-            serializer.save(user=user)
-        else:
+        if not hasattr(request.user, 'candidate_profile'):
             raise PermissionDenied("Only candidates can create applications.")
+
+        cv_upload = request.FILES.get('cv')
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            candidate = serializer.save(user=request.user)
+        except IntegrityError:
+            return Response(
+                {'error': 'You have already applied for this job.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ActivityLog.objects.create(
+            candidate=candidate,
+            event_type=ActivityLog.EventType.APPLICATION_SUBMITTED,
+            note="Application submitted",
+            created_by_type=ActivityLog.CreatedByType.CANDIDATE,
+            created_by_id=request.user.id,
+        )
+
+        if cv_upload:
+            try:
+                process_candidate_cv(candidate, cv_upload, request.user)
+            except ValueError as exc:
+                candidate.delete()
+                return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            except Exception as exc:
+                logger.exception("Candidate CV processing failed for %s", candidate.id)
+                candidate.delete()
+                return Response(
+                    {'error': 'Candidate CV processing failed. Please try again.', 'detail': str(exc)},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+
+        output_serializer = self.get_serializer(candidate)
+        headers = self.get_success_headers(output_serializer.data)
+        return Response(output_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -153,66 +265,6 @@ class ActivityLogViewSet(viewsets.ModelViewSet):
         elif hasattr(user, 'candidate_profile'):
             return ActivityLog.objects.filter(candidate__user=user)
         return ActivityLog.objects.none()
-
-
-# class VideoUploadView(APIView):
-#     permission_classes = [permissions.IsAuthenticated]
-
-#     def post(self, request, candidate_id):
-#         candidate = Candidate.objects.get(id=candidate_id)
-#         if hasattr(request.user, 'candidate_profile'):
-#             if candidate.user != request.user:
-#                 return Response({'error': 'Not your application.'}, status=403)
-#         else:
-#             return Response({'error': 'Only candidates can upload videos.'}, status=403)
-
-#         if candidate.video_intro_url:
-#             return Response({'error': 'Video already uploaded.'}, status=400)
-
-#         one_hour_ago = timezone.now() - timezone.timedelta(hours=1)
-        
-#         if candidate.video_attempts >= 5:
-#             if candidate.video_last_failed_attempt and candidate.video_last_failed_attempt > one_hour_ago:
-#                 wait_minutes = 60 - ((timezone.now() - candidate.video_last_failed_attempt).seconds // 60)
-#                 return Response(
-#                     {'error': f'Too many failed attempts. Please try again in {wait_minutes} minutes.'},
-#                     status=status.HTTP_429_TOO_MANY_REQUESTS
-#                 )
-#             else:
-#                 candidate.video_attempts = 0
-#                 candidate.video_last_failed_attempt = None
-#                 candidate.save(update_fields=['video_attempts', 'video_last_failed_attempt'])
-
-#         upload_success = True  
-        
-#         if upload_success:
-#             candidate.video_intro_url = "https://stream.example.com/video-id"  
-#             candidate.video_uploaded_at = timezone.now()
-#             candidate.video_attempts = 0
-#             candidate.video_last_failed_attempt = None
-#             candidate.save()
-            
-#             ActivityLog.objects.create(
-#                 candidate=candidate,
-#                 event_type=ActivityLog.EventType.VIDEO_UPLOADED,
-#                 note="Video uploaded successfully",
-#                 created_by_type=ActivityLog.CreatedByType.CANDIDATE,
-#                 created_by_id=None,
-#             )
-            
-#             return Response({'message': 'Video uploaded successfully'}, status=200)
-#         else:
-#             candidate.video_attempts += 1
-#             candidate.video_last_failed_attempt = timezone.now()
-#             candidate.save(update_fields=['video_attempts', 'video_last_failed_attempt'])
-            
-#             remaining = 5 - candidate.video_attempts
-#             return Response(
-#                 {'error': f'Upload failed. {remaining} attempts remaining.'},
-#                 status=status.HTTP_400_BAD_REQUEST
-#             )
-
-
 
 
 class VideoUploadView(APIView):
@@ -312,8 +364,6 @@ class VideoUploadConfirmView(APIView):
             return Response({'error': f'Failed to save video: {str(e)}'}, status=500)
 
 
-
-
 class CVUploadURLView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -374,7 +424,7 @@ class CVUploadConfirmView(APIView):
         import requests
         import os
         import magic
-        
+
         try:
             candidate = Candidate.objects.select_related('user', 'job__posted_by').get(id=candidate_id)
         except Candidate.DoesNotExist:
@@ -613,12 +663,14 @@ class MyApplicationsStatsViewSet(viewsets.ViewSet):
         
         return Response(stats)
 
+
 class BulkUpdateThrottle(UserRateThrottle):
     scope = 'bulk_update'
 
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
-@throttle_classes([BulkUpdateThrottle])  
+@throttle_classes([BulkUpdateThrottle])
 def bulk_update_status(request):
     """
     Bulk update status for multiple candidates.
@@ -626,25 +678,25 @@ def bulk_update_status(request):
     """
     if not hasattr(request.user, 'recruiter_profile'):
         return Response({'error': 'Only recruiters can bulk update statuses.'}, status=403)
-    
+
     candidate_ids = request.data.get('candidate_ids', [])
     new_status = request.data.get('status')
-    
+
     if not candidate_ids or not new_status:
         return Response({'error': 'candidate_ids and status are required.'}, status=400)
-    
+
     if new_status not in Candidate.Status.values:
         return Response({'error': f'Invalid status. Choices: {Candidate.Status.values}'}, status=400)
-    
+
     candidates = Candidate.objects.filter(
         id__in=candidate_ids,
         job__posted_by=request.user.recruiter_profile,
         deleted_at__isnull=True
     ).select_related('job__posted_by')
-    
+
     updated_count = 0
     errors = []
-    
+
     for candidate in candidates:
         old_status = candidate.status
         if new_status not in VALID_TRANSITIONS.get(old_status, []):
@@ -653,23 +705,23 @@ def bulk_update_status(request):
                 'error': f"Cannot transition from '{old_status}' to '{new_status}'"
             })
             continue
-        
+
         candidate.status = new_status
         candidate.save(update_fields=['status', 'updated_at'])
-        
+
         from apps.candidate.services.email_notifications import send_status_email
-        send_status_email(candidate, new_status, old_status)  
+        send_status_email(candidate, new_status, old_status)
 
         ActivityLog.objects.create(
             candidate=candidate,
             event_type=ActivityLog.EventType.SHORTLISTED if new_status == Candidate.Status.SHORTLISTED else ActivityLog.EventType.HOLD,
             note=f"Status changed from {old_status} to {new_status} via bulk update",
             created_by_type=ActivityLog.CreatedByType.RECRUITER,
-            created_by_id=None, 
+            created_by_id=None,
             visibility=ActivityLog.Visibility.BOTH,
         )
         updated_count += 1
-    
+
     return Response({
         'updated_count': updated_count,
         'errors': errors,

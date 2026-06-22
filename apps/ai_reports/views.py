@@ -1,6 +1,7 @@
 """
 AI report views.
-Candidates can view only their own reports; recruiters can view all.
+Candidates can view only their own reports; recruiters can view reports for
+candidates who applied to jobs they posted.
 Write operations are restricted to admin recruiters (system internal use).
 """
 from rest_framework import viewsets, permissions
@@ -21,10 +22,23 @@ class AIReportViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         user = self.request.user
         if hasattr(user, 'recruiter_profile'):
-            return AIReport.objects.all()
+            queryset = AIReport.objects.filter(
+                candidate__job__posted_by=user.recruiter_profile
+            ).select_related('candidate__user')
         elif hasattr(user, 'candidate_profile'):
-            return AIReport.objects.filter(candidate__user=user).select_related('candidate__user')
-        return AIReport.objects.none()
+            queryset = AIReport.objects.filter(candidate__user=user).select_related('candidate__user')
+        else:
+            queryset = AIReport.objects.none()
+
+        interview_id = self.request.query_params.get('interview')
+        if interview_id:
+            queryset = queryset.filter(interview_id=interview_id)
+
+        report_type = self.request.query_params.get('report_type')
+        if report_type:
+            queryset = queryset.filter(report_type=report_type)
+
+        return queryset
 
 
 class TemporaryAIResponseViewSet(viewsets.ModelViewSet):

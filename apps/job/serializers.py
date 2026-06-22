@@ -25,6 +25,7 @@ class JobSerializer(serializers.ModelSerializer):
     department_display = serializers.CharField(source='get_department_display', read_only=True)
     shift_type_display = serializers.CharField(source='get_shift_type_display', read_only=True)
     employment_type_display = serializers.CharField(source='get_employment_type_display', read_only=True)
+    shortlisted_count = serializers.IntegerField(read_only=True, default=0)
 
     class Meta:
         model = Job
