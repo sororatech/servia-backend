@@ -46,20 +46,20 @@ class LoginThrottle(UserRateThrottle):
 
 class CandidateUserViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for candidate profiles. Only admin users can list/create.
+    ViewSet for candidate profiles. Only admin recruiters can list/create.
     """
-    queryset = CandidateUser.objects.all()
+    queryset = CandidateUser.objects.select_related('user').all()
     serializer_class = CandidateUserSerializer
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [permissions.IsAuthenticated, IsAdminRecruiter]
 
 
 class RecruiterUserViewSet(viewsets.ModelViewSet):
     """
-    ViewSet for recruiter profiles. Only admin users can list/create.
+    ViewSet for recruiter profiles. Only admin recruiters can list/create.
     """
-    queryset = RecruiterUser.objects.all()
+    queryset = RecruiterUser.objects.select_related('user').all()
     serializer_class = RecruiterUserSerializer
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [permissions.IsAuthenticated, IsAdminRecruiter]
 
 
 class CustomAuthToken(APIView):
@@ -94,6 +94,9 @@ class CustomAuthToken(APIView):
                  'code': "EMAIL_NOT_VERIFIED"},
                 status=status.HTTP_403_FORBIDDEN
             )
+
+        user.last_login = timezone.now()
+        user.save(update_fields=['last_login'])
 
         user_type = None
         if hasattr(user, 'candidate_profile'):
@@ -667,6 +670,11 @@ class AvatarUploadConfirmView(APIView):
 
 
 class RecruiterStatsView(APIView):
+    """
+    Returns dashboard statistics.
+    - Admin users: See ALL jobs and candidates across the entire system
+    - Regular recruiters: See only their own jobs and candidates
+    """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -676,22 +684,33 @@ class RecruiterStatsView(APIView):
 
         recruiter = user.recruiter_profile
         now = timezone.now()
-
-        jobs = Job.objects.filter(
-            posted_by=recruiter,
-            is_active=True,
-            deleted_at__isnull=True
-        ).filter(Q(application_deadline__isnull=True) | Q(application_deadline__gt=now))
+        
+        is_admin = user.is_superuser or recruiter.role == RecruiterUser.Role.ADMIN
+        
+        if is_admin:
+            jobs = Job.objects.filter(
+                is_active=True,
+                deleted_at__isnull=True
+            ).filter(Q(application_deadline__isnull=True) | Q(application_deadline__gt=now))
+            
+            candidates = Candidate.objects.filter(deleted_at__isnull=True)
+        else:
+            jobs = Job.objects.filter(
+                posted_by=recruiter,
+                is_active=True,
+                deleted_at__isnull=True
+            ).filter(Q(application_deadline__isnull=True) | Q(application_deadline__gt=now))
+            
+            candidates = Candidate.objects.filter(job__in=jobs, deleted_at__isnull=True)
 
         total_jobs = jobs.count()
-
-        candidates = Candidate.objects.filter(job__in=jobs, deleted_at__isnull=True)
         total_candidates = candidates.count()
-
         pending_review = candidates.filter(status__in=['applied', 'screened']).count()
+        shortlisted = candidates.filter(status='shortlisted').count()
 
         return Response({
             'total_jobs': total_jobs,
             'total_candidates': total_candidates,
             'pending_review': pending_review,
+            'shortlisted': shortlisted,
         })

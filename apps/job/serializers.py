@@ -26,7 +26,7 @@ class JobSerializer(serializers.ModelSerializer):
     shift_type_display = serializers.CharField(source='get_shift_type_display', read_only=True)
     employment_type_display = serializers.CharField(source='get_employment_type_display', read_only=True)
     shortlisted_count = serializers.IntegerField(read_only=True, default=0)
-
+    posted_by_name = serializers.SerializerMethodField()
     class Meta:
         model = Job
         fields = '__all__'
@@ -39,7 +39,10 @@ class JobSerializer(serializers.ModelSerializer):
         if not all(isinstance(skill, str) for skill in value):
             raise serializers.ValidationError("Each skill must be a string")
         return value
-    
+    def get_posted_by_name(self, obj):
+        if obj.posted_by and obj.posted_by.user:
+            return f"{obj.posted_by.user.first_name} {obj.posted_by.user.last_name}".strip()
+        return "Unknown"
     def validate(self, data):
         """Validate salary range logic"""
         salary_min = data.get('salary_min')

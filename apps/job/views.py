@@ -20,6 +20,9 @@ class JobViewSet(viewsets.ModelViewSet):
             shortlisted_count=Count('candidate', filter=Q(candidate__status='shortlisted')),
         ).select_related('posted_by__user').order_by('-created_at')
         
+        if user.is_superuser or (hasattr(user, 'recruiter_profile') and user.recruiter_profile == 'admin'):
+            return queryset
+        
         public_filter = (
             Q(is_active=True) & 
             Q(deleted_at__isnull=True) & 
@@ -29,7 +32,6 @@ class JobViewSet(viewsets.ModelViewSet):
         if not hasattr(user, 'recruiter_profile'):
             return queryset.filter(public_filter)
         
-        # Recruiters: see their own jobs + public jobs
         return queryset.filter(
             Q(posted_by=user.recruiter_profile) | public_filter
         )

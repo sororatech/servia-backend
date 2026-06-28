@@ -127,6 +127,8 @@ class CandidateViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+        if user.is_superuser or (hasattr(user, 'recruiter_profile') and user.recruiter_profile == 'admin'):
+            return Candidate.objects.filter(deleted_at__isnull=True).select_related('user', 'job__posted_by__user')
         if hasattr(user, 'recruiter_profile'):
             return Candidate.objects.filter(
                 job__posted_by=user.recruiter_profile,
@@ -260,6 +262,8 @@ class ActivityLogViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+        if user.is_superuser or (hasattr(user, 'recruiter_profile') and user.recruiter_profile == 'admin'):
+            return Candidate.objects.filter(deleted_at__isnull=True).select_related('user', 'job__posted_by__user')
         if hasattr(user, 'recruiter_profile'):
             return ActivityLog.objects.all()
         elif hasattr(user, 'candidate_profile'):
@@ -587,6 +591,8 @@ class MyApplicationsViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         user = self.request.user
+        if user.is_superuser or (hasattr(user, 'recruiter_profile') and user.recruiter_profile.is_admin):
+            return Candidate.objects.filter(deleted_at__isnull=True).select_related('user', 'job__posted_by__user')
         if hasattr(user, 'candidate_profile'):
             return Candidate.objects.filter(
                 user=user,

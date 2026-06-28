@@ -39,6 +39,8 @@ class InterviewViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+        if user.is_superuser or (hasattr(user, 'recruiter_profile') and user.recruiter_profile == 'admin'):
+            return Interview.objects.all()
         if hasattr(user, 'recruiter_profile'):
             return Interview.objects.filter(job__posted_by=user.recruiter_profile)
         elif hasattr(user, 'candidate_profile'):
@@ -210,6 +212,8 @@ class InterviewConversationViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
+        if user.is_superuser or (hasattr(user, 'recruiter_profile') and user.recruiter_profile == 'admin'):
+            return InterviewConversation.objects.all()
         if hasattr(user, 'recruiter_profile'):
             return InterviewConversation.objects.filter(
                 interview__job__posted_by=user.recruiter_profile

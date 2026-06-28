@@ -192,6 +192,7 @@ REST_FRAMEWORK = {
         # (interviews page loads 4 paginated lists; live page polls every 5s).
         'anon': '60/minute',
         'user': '300/minute',
+        'login': '5/min',
         'bulk_update': '10/minute',
     },
 }
