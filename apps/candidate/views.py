@@ -16,7 +16,7 @@ from rest_framework import status
 from django.db import models
 from django.db.models import Q 
 from django.conf import settings
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from apps.job.models import Job
 from .services.storage import delete_file, generate_signed_url, upload_fileobj
@@ -142,39 +142,60 @@ class CandidateViewSet(viewsets.ModelViewSet):
         user = request.user
         job_id = request.data.get('job')
 
-        if hasattr(user, 'candidate_profile') and job_id:
-            try:
-                job = Job.objects.get(id=job_id)
-            except Job.DoesNotExist:
-                return Response({'job': ['Job not found.']}, status=status.HTTP_400_BAD_REQUEST)
-
-            now = timezone.now()
-            if not job.is_active:
-                return Response({'job': ['This job is no longer accepting applications.']}, status=status.HTTP_400_BAD_REQUEST)
-            if job.deleted_at:
-                return Response({'job': ['This job has been removed.']}, status=status.HTTP_400_BAD_REQUEST)
-            if job.application_deadline and job.application_deadline < now:
-                return Response({'job': ['Application deadline has passed.']}, status=status.HTTP_400_BAD_REQUEST)
-
-            existing = Candidate.objects.filter(user=user, job=job, deleted_at__isnull=True).exclude(status=Candidate.Status.WITHDRAWN).first()
-            if existing:
-                serializer = self.get_serializer(existing)
-                return Response({
-                    'id': serializer.data['id'],
-                    'already_exists': True,
-                    'message': 'You have already applied to this job.',
-                    'status': existing.status
-                }, status=status.HTTP_200_OK)
-
-        if not hasattr(request.user, 'candidate_profile'):
+        if not hasattr(user, 'candidate_profile'):
             raise PermissionDenied("Only candidates can create applications.")
 
-        cv_upload = request.FILES.get('cv')
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not job_id:
+            return Response({'job': ['This field is required.']}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            candidate = serializer.save(user=request.user)
+            job = Job.objects.get(id=job_id)
+        except Job.DoesNotExist:
+            return Response({'job': ['Job not found.']}, status=status.HTTP_400_BAD_REQUEST)
+
+        now = timezone.now()
+        if not job.is_active:
+            return Response({'job': ['This job is no longer accepting applications.']}, status=status.HTTP_400_BAD_REQUEST)
+        if job.deleted_at:
+            return Response({'job': ['This job has been removed.']}, status=status.HTTP_400_BAD_REQUEST)
+        if job.application_deadline and job.application_deadline < now:
+            return Response({'job': ['Application deadline has passed.']}, status=status.HTTP_400_BAD_REQUEST)
+
+        existing = Candidate.objects.filter(user=user, job=job, deleted_at__isnull=True).exclude(status=Candidate.Status.WITHDRAWN).first()
+        if existing:
+            serializer = self.get_serializer(existing)
+            return Response({
+                'id': serializer.data['id'],
+                'already_exists': True,
+                'message': 'You have already applied to this job.',
+                'status': existing.status
+            }, status=status.HTTP_200_OK)
+
+        # A previously withdrawn application still occupies the (user, job) unique
+        # constraint, so reapplying must reactivate that row instead of inserting a new one.
+        withdrawn = Candidate.objects.filter(
+            user=user, job=job, deleted_at__isnull=True, status=Candidate.Status.WITHDRAWN
+        ).first()
+
+        cv_upload = request.FILES.get('cv')
+        serializer = self.get_serializer(instance=withdrawn, data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        save_kwargs = {'user': request.user, 'job': job}
+        if withdrawn:
+            save_kwargs.update(
+                status=Candidate.Status.APPLIED,
+                cv_file=None, cv_filename=None, cv_text=None, cv_uploaded_at=None,
+                cv_status=Candidate.CVStatus.PENDING,
+                video_intro_url=None, video_uploaded_at=None,
+                video_attempts=0, video_last_failed_attempt=None,
+                ai_score=None, ai_summary=None, ai_feedback=None, ai_confidence=None,
+                ai_strengths=[], ai_weaknesses=[], ai_skills=[],
+            )
+
+        try:
+            with transaction.atomic():
+                candidate = serializer.save(**save_kwargs)
         except IntegrityError:
             return Response(
                 {'error': 'You have already applied for this job.'},
