@@ -6,6 +6,7 @@ from apps.job.models import Job
 
 class Candidate(models.Model):
     class Status(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
         APPLIED = 'applied', 'Applied'
         SCREENED = 'screened', 'Screened'
         SHORTLISTED = 'shortlisted', 'Shortlisted'
@@ -32,9 +33,9 @@ class Candidate(models.Model):
         LOW = 'low', 'Low'
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, db_index=True)   # use settings.AUTH_USER_MODEL
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, db_index=True)   
     job = models.ForeignKey(Job, on_delete=models.CASCADE, db_index=True)
-    status = models.CharField(max_length=50, choices=Status.choices, default=Status.APPLIED, db_index=True)
+    status = models.CharField(max_length=50, choices=Status.choices, default=Status.DRAFT, db_index=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
 
     cv_file = models.CharField(max_length=500, blank=True, null=True)

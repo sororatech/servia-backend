@@ -161,47 +161,62 @@ class CandidateViewSet(viewsets.ModelViewSet):
         if job.application_deadline and job.application_deadline < now:
             return Response({'job': ['Application deadline has passed.']}, status=status.HTTP_400_BAD_REQUEST)
 
-        existing = Candidate.objects.filter(user=user, job=job, deleted_at__isnull=True).exclude(status=Candidate.Status.WITHDRAWN).first()
-        if existing:
-            serializer = self.get_serializer(existing)
+        existing_completed = Candidate.objects.filter(
+            user=user, 
+            job=job, 
+            deleted_at__isnull=True,
+            status__in=[Candidate.Status.APPLIED, Candidate.Status.SHORTLISTED, Candidate.Status.VIDEO_SUBMITTED]
+        ).first()
+
+        if existing_completed:
+            serializer = self.get_serializer(existing_completed)
             return Response({
-                'id': serializer.data['id'],
-                'already_exists': True,
-                'message': 'You have already applied to this job.',
-                'status': existing.status
+                 'id': serializer.data['id'],
+                 'already_exists': True,
+                 'message': 'You have already applied to this job.',
+                 'status': existing_completed.status
             }, status=status.HTTP_200_OK)
 
-        # A previously withdrawn application still occupies the (user, job) unique
-        # constraint, so reapplying must reactivate that row instead of inserting a new one.
-        withdrawn = Candidate.objects.filter(
-            user=user, job=job, deleted_at__isnull=True, status=Candidate.Status.WITHDRAWN
+
+        existing_draft_or_withdrawn = Candidate.objects.filter(
+            user=user, job=job, deleted_at__isnull=True, 
+            status__in=[Candidate.Status.DRAFT, Candidate.Status.WITHDRAWN]
         ).first()
 
         cv_upload = request.FILES.get('cv')
-        serializer = self.get_serializer(instance=withdrawn, data=request.data)
+        serializer = self.get_serializer(instance=existing_draft_or_withdrawn, data=request.data)
         serializer.is_valid(raise_exception=True)
 
         save_kwargs = {'user': request.user, 'job': job}
-        if withdrawn:
-            save_kwargs.update(
-                status=Candidate.Status.APPLIED,
-                cv_file=None, cv_filename=None, cv_text=None, cv_uploaded_at=None,
-                cv_status=Candidate.CVStatus.PENDING,
-                video_intro_url=None, video_uploaded_at=None,
-                video_attempts=0, video_last_failed_attempt=None,
-                ai_score=None, ai_summary=None, ai_feedback=None, ai_confidence=None,
-                ai_strengths=[], ai_weaknesses=[], ai_skills=[],
-            )
+        if existing_draft_or_withdrawn:
+            if existing_draft_or_withdrawn.status == Candidate.Status.WITHDRAWN:
+                save_kwargs.update(
+                    status=Candidate.Status.APPLIED,
+                    cv_file=None, cv_filename=None, cv_text=None, cv_uploaded_at=None,
+                    cv_status=Candidate.CVStatus.PENDING,
+                    video_intro_url=None, video_uploaded_at=None,
+                    video_attempts=0, video_last_failed_attempt=None,
+                    ai_score=None, ai_summary=None, ai_feedback=None, ai_confidence=None,
+                    ai_strengths=[], ai_weaknesses=[], ai_skills=[],
+                )
 
         try:
             with transaction.atomic():
                 candidate = serializer.save(**save_kwargs)
         except IntegrityError:
+            fallback = Candidate.objects.filter(user=user, job=job, deleted_at__isnull=True).first()
+            if fallback:
+                serializer = self.get_serializer(fallback)
+                return Response({
+                    'id': serializer.data['id'],
+                    'already_exists': fallback.status not in [Candidate.Status.DRAFT, Candidate.Status.WITHDRAWN],
+                    'message': 'Application found.',
+                    'status': fallback.status
+                }, status=status.HTTP_200_OK)
             return Response(
                 {'error': 'You have already applied for this job.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         ActivityLog.objects.create(
             candidate=candidate,
             event_type=ActivityLog.EventType.APPLICATION_SUBMITTED,
@@ -555,6 +570,10 @@ class CVUploadConfirmView(APIView):
 
             os.unlink(tmp_path)
             logger.info(f"CV confirmed & queued for candidate {candidate_id}")
+
+            if candidate.status == Candidate.Status.DRAFT:
+                candidate.status = Candidate.Status.APPLIED
+                candidate.save(update_fields=['status'])
             return Response({'status': 'CV uploaded successfully', 'cv_status': 'processing'})
 
         except magic.MagicException:
