@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Welcome to ServiaAI</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: #1a56db; color: white; padding: 20px; text-align: center; }
+        .content { padding: 20px; background: #f9fafb; }
+        .footer { text-align: center; padding: 20px; font-size: 12px; color: #6b7280; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Welcome to ServiaAI!</h1>
+        </div>
+        <div class="content">
+            <p>Hello <strong>{{ user.first_name }}</strong>,</p>
+            <p>Welcome to ServiaAI! Your account has been created successfully.</p>
+            <p>You can now browse jobs and apply.</p>
+            <p>Thank you,<br>ServiaAI Team</p>
+        </div>
+        <div class="footer">
+            <p>ServiaAI – AI-Powered Hospitality Recruitment</p>
+        </div>
+    </div>
+</body>
+</html>

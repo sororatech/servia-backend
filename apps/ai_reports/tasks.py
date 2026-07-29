@@ -1,0 +1,170 @@
+import logging
+
+from celery import shared_task
+from django.core.exceptions import ObjectDoesNotExist
+
+logger = logging.getLogger(__name__)
+from django.db import transaction
+from rest_framework.exceptions import ValidationError
+
+from apps.ai_reports.models import AIReport, TemporaryAIResponse
+from apps.ai_reports.serializers import AIReportSerializer
+from apps.candidate.models import Candidate
+from apps.users.tasks import send_cv_analyzed_email, send_rejected_cv_email, send_shortlisted_email
+from apps.ai_reports.services.gemini_client import (
+    GeminiConfigurationError,
+    GeminiResponseError,
+    analyze_cv,
+)
+
+
+def _can_update_task_state(task) -> bool:
+    task_id = getattr(getattr(task, 'request', None), 'id', None)
+    return bool(task_id)
+
+
+def _safe_update_state(task, state: str, meta: dict):
+    if _can_update_task_state(task):
+        task.update_state(state=state, meta=meta)
+
+
+@shared_task(bind=True, max_retries=3)
+def analyze_cv_task(self, candidate_id: str, cv_text: str, job_description: str, core_skills: list, education_level: str = None) -> dict:
+    """
+    Background Celery task to analyze a candidate CV using Gemini Flash.
+    """
+    try:
+        logger.info(f"Starting CV analysis for candidate {candidate_id}")
+
+        candidate = Candidate.objects.filter(id=candidate_id).first()
+        if not candidate:
+            logger.error(f"Candidate {candidate_id} not found for CV analysis")
+            return {'candidate_id': candidate_id, 'status': 'failed', 'reason': 'candidate_not_found'}
+
+        if AIReport.objects.filter(
+            candidate=candidate,
+            report_type=AIReport.ReportType.CV_SCREENING,
+        ).exists():
+            logger.info(f"AIReport already exists for candidate {candidate_id} — skipping duplicate analysis.")
+            return {'candidate_id': candidate_id, 'status': 'skipped', 'reason': 'report_already_exists'}
+
+        _safe_update_state(
+            self,
+            state='PROGRESS',
+            meta={'candidate_id': candidate_id, 'status': 'Analyzing CV...'}
+        )
+
+        result = analyze_cv(
+            cv_text=cv_text,
+            job_description=job_description,
+            core_skills= core_skills,
+            education_level=education_level
+        )
+
+        _safe_update_state(
+            self,
+            state='PROGRESS',
+            meta={'candidate_id': candidate_id, 'status': 'Validating AI response...'}
+        )
+
+        serializer = AIReportSerializer(data=result)
+        serializer.is_valid(raise_exception=True)
+
+        _safe_update_state(
+            self,
+            state='PROGRESS',
+            meta={'candidate_id': candidate_id, 'status': 'Saving AI report...'}
+        )
+
+        with transaction.atomic():
+            vd = serializer.validated_data
+            report = AIReport.objects.create(
+                candidate=candidate,
+                report_type=AIReport.ReportType.CV_SCREENING,
+                raw_response=result,
+                fit_score=vd['fit_score'],
+                summary=vd['summary'],
+                strengths=vd['strengths'],
+                weaknesses=vd['weaknesses'],
+                feedback=vd['feedback'],
+                extracted_skills=vd.get('extracted_skills') or [],
+                skills_match_details=vd.get('skills_match_details'),
+                education_match=vd.get('education_match'),
+            )
+
+            fit_score = serializer.validated_data['fit_score']
+            candidate.ai_score = fit_score
+            candidate.ai_summary = serializer.validated_data['summary']
+            candidate.ai_strengths = serializer.validated_data['strengths']
+            candidate.ai_weaknesses = serializer.validated_data['weaknesses']
+            candidate.ai_skills = serializer.validated_data.get('extracted_skills', [])
+            candidate.ai_feedback = serializer.validated_data['feedback']
+            candidate.cv_status = Candidate.CVStatus.ANALYZED
+
+            update_fields = [
+                'ai_score', 'ai_summary', 'ai_strengths',
+                'ai_weaknesses', 'ai_skills', 'ai_feedback', 'cv_status', 'updated_at',
+            ]
+
+            if fit_score >= 70:
+                candidate.status = Candidate.Status.SHORTLISTED
+                update_fields.append('status')
+            elif fit_score < 40:
+                candidate.status = Candidate.Status.REJECTED_CV
+                update_fields.append('status')
+            else:
+                candidate.status = Candidate.Status.SCREENED  
+                update_fields.append('status')
+
+            candidate.save(update_fields=update_fields)
+
+        if candidate.status == Candidate.Status.SHORTLISTED:
+            send_shortlisted_email.delay(candidate_id)
+        elif candidate.status == Candidate.Status.REJECTED_CV:
+            send_rejected_cv_email.delay(candidate_id)
+        elif candidate.status == Candidate.Status.SCREENED:
+            send_cv_analyzed_email.delay(candidate_id)
+        logger.info(f"CV analysis complete for candidate {candidate_id} — score: {result['fit_score']}")
+
+        return {
+            'candidate_id': candidate_id,
+            'status': 'complete',
+            'report_id': str(report.id),
+            'result': serializer.validated_data,
+        }
+
+    except (ValidationError, GeminiResponseError, GeminiConfigurationError, ObjectDoesNotExist) as e:
+        candidate = Candidate.objects.filter(id=candidate_id).first()
+        if candidate:
+            candidate.cv_status = Candidate.CVStatus.ERROR
+            candidate.save(update_fields=['cv_status'])
+            TemporaryAIResponse.objects.create(
+                candidate=candidate,
+                raw_response={
+                    'error': str(e),
+                    'candidate_id': candidate_id,
+                },
+            )
+        _safe_update_state(
+            self,
+            state='FAILURE',
+            meta={'candidate_id': candidate_id, 'status': 'failed', 'error': str(e)}
+        )
+        logger.error(f"CV analysis failed validation/config for candidate {candidate_id}: {e}")
+        raise
+
+    except Exception as e:
+        logger.error(f"CV analysis failed for candidate {candidate_id}: {e}")
+        if self.request.retries >= self.max_retries:
+            candidate = Candidate.objects.filter(id=candidate_id).first()
+            if candidate:
+                candidate.cv_status = Candidate.CVStatus.ERROR
+                candidate.save(update_fields=['cv_status'])
+        if _can_update_task_state(self):
+            raise self.retry(exc=e, countdown=60)
+
+        candidate = Candidate.objects.filter(id=candidate_id).first()
+        if candidate:
+            candidate.cv_status = Candidate.CVStatus.ERROR
+            candidate.save(update_fields=['cv_status'])
+        raise
