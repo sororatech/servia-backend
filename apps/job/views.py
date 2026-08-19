@@ -111,3 +111,6 @@ def department_categories(request):
     }
     
     return Response(formatted)
+
+
+
