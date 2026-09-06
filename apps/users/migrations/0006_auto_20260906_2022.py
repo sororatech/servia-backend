@@ -48,9 +48,9 @@ def create_default_accounts(apps, schema_editor):
         print("✅ Candidate account created: candidate@servia.com")
 
 class Migration(migrations.Migration):
-    # Django auto-fills this correctly when you run makemigrations
+  
     dependencies = [
-        ('users', '0005_merge_20260611_1302'),  # Your latest migration
+        ('users', '0005_merge_20260611_1302'),  
     ]
 
     operations = [
