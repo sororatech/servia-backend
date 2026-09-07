@@ -172,6 +172,26 @@ else:
 CORS_ALLOW_CREDENTIALS = os.getenv('CORS_ALLOW_CREDENTIALS', 'True') == 'True'
 
 
+# === CSRF Trusted Origins ===
+# Read from env var with fallback for localhost
+csrf_trusted_raw = os.getenv('CSRF_TRUSTED_ORIGINS', '')
+if csrf_trusted_raw:
+    CSRF_TRUSTED_ORIGINS = [
+        origin.strip() for origin in csrf_trusted_raw.split(',') if origin.strip()
+    ]
+else:
+    # Fallback for local development
+    CSRF_TRUSTED_ORIGINS = [
+        'http://localhost:3000',
+        'http://127.0.0.1:3000',
+        'http://localhost:8000',
+    ]
+
+# Always add the production Render URL if not already included
+if DEBUG is False and 'https://servia-backend-p810.onrender.com' not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append('https://servia-backend-p810.onrender.com')
+
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework.authentication.TokenAuthentication', 
